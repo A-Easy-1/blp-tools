@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0A532C502DA3CD1C006D207A /* opencv2.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0A532C4F2DA3CD1C006D207A /* opencv2.framework */; };
+		0A532C502DA3CD1C006D207A /* opencv2.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0A532C4F2DA3CD1C006D207A /* opencv2.xcframework */; };
 		0ADFD5642D0C1FC600B5D6AA /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0ADFD5632D0C1FC600B5D6AA /* CoreMedia.framework */; };
 		0ADFD5662D0C1FCB00B5D6AA /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0ADFD5652D0C1FCB00B5D6AA /* Vision.framework */; };
 		0ADFD5682D0C1FCF00B5D6AA /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0ADFD5672D0C1FCF00B5D6AA /* AVFoundation.framework */; };
@@ -24,7 +24,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		0A532C4F2DA3CD1C006D207A /* opencv2.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = opencv2.framework; path = "opencv-ios-framework/opencv2.framework"; sourceTree = "<group>"; };
+		0A532C4F2DA3CD1C006D207A /* opencv2.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = opencv2.xcframework; path = "opencv-ios-framework/opencv2.xcframework"; sourceTree = "<group>"; };
 		0AC1CA152D842A0C00873D34 /* blp-tools-tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "blp-tools-tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0ADFD5352D0C1F7000B5D6AA /* blp-tools.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "blp-tools.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0ADFD5632D0C1FC600B5D6AA /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
@@ -73,7 +73,7 @@
 			files = (
 				0ADFD5682D0C1FCF00B5D6AA /* AVFoundation.framework in Frameworks */,
 				0ADFD5642D0C1FC600B5D6AA /* CoreMedia.framework in Frameworks */,
-				0A532C502DA3CD1C006D207A /* opencv2.framework in Frameworks */,
+				0A532C502DA3CD1C006D207A /* opencv2.xcframework in Frameworks */,
 				0ADFD5662D0C1FCB00B5D6AA /* Vision.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -84,7 +84,7 @@
 		0ADFD52C2D0C1F7000B5D6AA = {
 			isa = PBXGroup;
 			children = (
-				0A532C4F2DA3CD1C006D207A /* opencv2.framework */,
+				0A532C4F2DA3CD1C006D207A /* opencv2.xcframework */,
 				0ADFD5372D0C1F7000B5D6AA /* blp-tools */,
 				0AC1CA162D842A0C00873D34 /* blp-tools-tests */,
 				0ADFD5622D0C1FC600B5D6AA /* Frameworks */,
@@ -292,7 +292,11 @@
 					"$(PROJECT_DIR)/opencv-ios-framework",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = "./**";
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/blp-tools",
+					"$(PROJECT_DIR)/opencv-ios-framework",
+				);
 				INFOPLIST_FILE = "blp-tools/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "BLP Tools";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
@@ -337,7 +341,11 @@
 					"$(PROJECT_DIR)/opencv-ios-framework",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = "./**";
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/blp-tools",
+					"$(PROJECT_DIR)/opencv-ios-framework",
+				);
 				INFOPLIST_FILE = "blp-tools/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "BLP Tools";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
@@ -417,7 +425,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -473,7 +481,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
