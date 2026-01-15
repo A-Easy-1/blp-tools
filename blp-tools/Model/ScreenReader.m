@@ -1,23 +1,14 @@
 #import "ScreenReader.h"
 #import "ImageUtilities.h"
-#import <Vision/Vision.h> // For VNRequestTextRecognitionLevel if needed
+#import <Vision/Vision.h>
 #import "ModelManager.h"
 
 @interface ScreenReader ()
-// An internal representation of the config array. Each item is a dictionary with keys:
-//   @"name"   -> NSString
-//   @"rect"   -> NSArray of 4 floats (x, y, w, h)
-//   @"format" -> NSArray of NSStrings (optional, can be empty)
 @property (nonatomic, strong, readonly) NSArray<NSDictionary *> *configItems;
-
 @property (nonatomic, strong, readonly) NSString *configType;
-
 @end
 
-@implementation ScreenReader {
-    // You could store the OCR results in a separate instance variable if you want to do lookups later.
-    // But here we just return them directly in runOCROnImage:.
-}
+@implementation ScreenReader
 
 // MARK: - Initializer
 - (instancetype)initWithJSONFile:(NSString *)filePath
@@ -25,8 +16,19 @@
                            error:(NSError **)error {
     self = [super init];
     if (self) {
+        // SAFETY CHECK: If the file path is nil (file missing in bundle), fail gracefully.
+        if (!filePath) {
+            NSString *msg = [NSString stringWithFormat:@"[ScreenReader] ERROR: JSON file path is nil. Check Copy Bundle Resources for type: %@", configType];
+            NSLog(@"%@", msg);
+            if (error) {
+                *error = [NSError errorWithDomain:@"ScreenReaderError" code:404 userInfo:@{NSLocalizedDescriptionKey: msg}];
+            }
+            return nil;
+        }
+
         BOOL success = [self loadConfigFromFile:filePath type:configType error:error];
         if (!success) {
+            NSLog(@"[ScreenReader] Failed to load config for type: %@", configType);
             return nil;
         }
     }
@@ -37,18 +39,27 @@
 - (BOOL)loadConfigFromFile:(NSString *)filePath
                       type:(NSString *)configType
                      error:(NSError **)error {
-    // 1) Read raw data
+    
+    // 1. Double check path existence
+    if (![[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"ScreenReaderError" code:404 userInfo:@{NSLocalizedDescriptionKey: @"File does not exist at path"}];
+        }
+        return NO;
+    }
+
+    // 2. Read raw data
     NSData *jsonData = [NSData dataWithContentsOfFile:filePath options:0 error:error];
     if (!jsonData) {
-        // *error already set by dataWithContentsOfFile if it fails
         return NO;
     }
     
-    // 2) Parse JSON into an NSArray of dictionaries
+    // 3. Parse JSON
     id parsed = [NSJSONSerialization JSONObjectWithData:jsonData
                                                 options:NSJSONReadingMutableContainers
                                                   error:error];
     if (!parsed || ![parsed isKindOfClass:[NSArray class]]) {
+        NSLog(@"[ScreenReader] JSON format invalid (expected Array) for %@", configType);
         return NO;
     }
     
@@ -62,19 +73,21 @@
 - (NSDictionary<NSString *, NSString *> *)runOCROnImage:(UIImage *)image
                                                   error:(NSError **)error
 {
-    // This dictionary will hold name => recognized text
+    if (!image) return @{};
+
     NSMutableDictionary<NSString *, NSString *> *results = [NSMutableDictionary dictionary];
     
-    results[@"type"] = self.configType;
+    if (self.configType) {
+        results[@"type"] = self.configType;
+    }
     
-    // For each item in config, read out name, rect, format
     for (NSDictionary *item in self.configItems) {
         NSString *name = item[@"name"];
         NSArray *rectArray = item[@"rect"];
-        NSArray<NSString *> *customFormat = item[@"format"]; // optional
+        NSArray<NSString *> *customFormat = item[@"format"];
         NSString *modelName = item[@"model"];
+        
         if (!name || !rectArray || rectArray.count < 4) {
-            // skip invalid item
             continue;
         }
         
@@ -86,11 +99,10 @@
         
         CGRect roi = CGRectMake(x, y, w, h);
         
-        UIImage* processedImage = [[UIImage alloc] init];
+        UIImage* processedImage = nil;
         
-        if(modelName == nil) { // No model, just use OCR
-            // For OCR, we can pass customFormat as customWords
-            // We'll default to 'Accurate' recognition level
+        if(modelName == nil) { // Use standard OCR
+            
             NSString *recognized = [ImageUtilities performOCR:image
                                              regionOfInterest:roi
                                                   customWords:customFormat
@@ -99,67 +111,49 @@
                                                processedImage:&processedImage
                                                         error:error];
             
-            if (*error) {
-                return nil;
-            }
+            if (error && *error) return nil;
             
-            //[ImageUtilities saveImageToDocuments:processedImage fileName:[name stringByAppendingString:@".png"]];
+            NSCharacterSet *whitespaceSet = [NSCharacterSet characterSetWithCharactersInString:@"\n\t '"];
+            NSString *cleanText = [[recognized componentsSeparatedByCharactersInSet:whitespaceSet] componentsJoinedByString:@""];
             
-            NSCharacterSet *whitespaceAndApostropheCharSet = [NSCharacterSet characterSetWithCharactersInString:@"\n\t '"];
-            NSArray *components = [recognized componentsSeparatedByCharactersInSet:whitespaceAndApostropheCharSet];
-            NSString* recognizedNoWhitespace = [components componentsJoinedByString:@""];
+            if (!cleanText) cleanText = @"";
             
-            // If recognized is nil but no error, it probably means no text found
-            if (!recognizedNoWhitespace) {
-                recognizedNoWhitespace = @"";
-            }
-            
-            // If we found nothing, or we found numbers that are typically confused, then
-            // try again, but add a suffix image which seems to help OCR detect things
-            if ([recognizedNoWhitespace isEqualToString:@""] ||
-                [recognizedNoWhitespace isEqualToString:@"6"] ||
-                [recognizedNoWhitespace isEqualToString:@"9"]) {
+            // Retry logic for difficult numbers
+            if ([cleanText isEqualToString:@""] || [cleanText isEqualToString:@"6"] || [cleanText isEqualToString:@"9"]) {
                 recognized = [ImageUtilities performOCR:image
                                        regionOfInterest:roi
                                             customWords:customFormat
-                                          addSuffixHack:true // Important
+                                          addSuffixHack:true
                                        recognitionLevel:VNRequestTextRecognitionLevelAccurate
                                          processedImage:&processedImage
                                                   error:error];
-                if (*error) {
-                    return nil;
-                }
+                if (error && *error) return nil;
                 
-                components = [recognized componentsSeparatedByCharactersInSet:whitespaceAndApostropheCharSet];
-                recognizedNoWhitespace = [components componentsJoinedByString:@""];
+                cleanText = [[recognized componentsSeparatedByCharactersInSet:whitespaceSet] componentsJoinedByString:@""];
+                if (!cleanText) cleanText = @"";
                 
-                if (!recognizedNoWhitespace) {
-                    recognizedNoWhitespace = @"";
+                // Strip suffix artifacts if present
+                if ([cleanText hasSuffix:@"0.5"]) {
+                    if (cleanText.length > 3) cleanText = [cleanText substringToIndex:cleanText.length - 3];
                 }
-//                if ([recognizedNoWhitespace hasSuffix:@".1"]) { // Strip the .1 suffix that we added if it exists
-//                    recognizedNoWhitespace = [recognizedNoWhitespace substringToIndex:recognizedNoWhitespace.length - 2];
-//                }
-                if ([recognizedNoWhitespace hasSuffix:@"0.5"]) { // Strip the .1 suffix that we added if it exists
-                    recognizedNoWhitespace = [recognizedNoWhitespace substringToIndex:recognizedNoWhitespace.length - 3];
+                if ([cleanText hasPrefix:@"0.5"]) {
+                    if (cleanText.length > 3) cleanText = [cleanText substringFromIndex:3];
                 }
-                if ([recognizedNoWhitespace hasPrefix:@"0.5"]) { // Strip the .1 suffix that we added if it exists
-                    recognizedNoWhitespace = [recognizedNoWhitespace substringFromIndex:3];
-                }
-                
-                //NSLog(@"recognized: %@ | clean: %@", recognized, recognizedNoWhitespace);
             }
             
-            results[name] = recognizedNoWhitespace;
+            results[name] = cleanText;
             
         } else {
+            // Use CoreML Model
             VNCoreMLModel *model = [[ModelManager shared] modelWithName:modelName];
             if (!model) {
-                NSLog(@"Model not found: %@", modelName);
-                return nil;
+                // Log but don't crash
+                // NSLog(@"Model not found: %@", modelName);
+                results[name] = @"";
+                continue;
             }
             
             float confidence = 0.0f;
-            
             NSString *recognized = [ImageUtilities runInference:image
                                                           model:model
                                                regionOfInterest:roi
@@ -167,12 +161,10 @@
                                                  processedImage:&processedImage
                                                           error:error];
             
-            results[name] = recognized;
+            results[name] = recognized ?: @"";
         }
-
     }
     
-    // Return a copy to avoid mutability concerns
     return [results copy];
 }
 

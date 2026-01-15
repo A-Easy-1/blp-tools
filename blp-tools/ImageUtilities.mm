@@ -2,35 +2,46 @@
 #import <CoreImage/CoreImage.h>
 #import <Vision/Vision.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <UIKit/UIKit.h>
 
+// ------------------------------------------------------------------
+// OpenCV / C++ Imports & Configuration
+// ------------------------------------------------------------------
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdocumentation"
 #pragma clang diagnostic ignored "-Wquoted-include-in-framework-header"
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #pragma clang diagnostic ignored "-Wnullability-completeness"
-#undef NO //Conflicts with opencv c++ defines
+
+// Fix conflict between OpenCV 'NO' and iOS 'NO'
+#ifdef NO
+#undef NO
+#endif
+
 #import <opencv2/opencv.hpp>
 #import <opencv2/imgcodecs/ios.h>
 #import <opencv2/imgproc/types_c.h>
 #pragma clang diagnostic pop
 
 // ------------------------------------------------------------------
-// C++ Helper Functions
+// C++ Helper Functions (Internal)
 // ------------------------------------------------------------------
 
 cv::Mat loadImageFromAssets(NSString *imageName) {
     UIImage *uiImage = [UIImage imageNamed:imageName];
-    if (!uiImage) {
-        NSLog(@"Failed to load image from assets: %@", imageName);
-        return cv::Mat();
-    }
+    if (!uiImage) return cv::Mat();
     cv::Mat cvImage;
     UIImageToMat(uiImage, cvImage);
-    cv::cvtColor(cvImage, cvImage, cv::COLOR_RGBA2BGR);
+    if (cvImage.channels() == 4) {
+        cv::cvtColor(cvImage, cvImage, cv::COLOR_RGBA2BGR);
+    }
     return cvImage;
 }
 
 cv::Mat concatImagesHorizontally(cv::Mat img1, cv::Mat img2) {
+    if (img1.empty()) return img2;
+    if (img2.empty()) return img1;
+    
     if (img1.rows != img2.rows) {
         int newHeight = std::min(img1.rows, img2.rows);
         double scale1 = (double)newHeight / img1.rows;
@@ -49,26 +60,44 @@ cv::Mat concatImagesHorizontally(cv::Mat img1, cv::Mat img2) {
 
 @implementation ImageUtilities
 
-// --- CRASH FIX: Safe Deep Copy ---
-// Prevents EXC_BAD_ACCESS by detaching image from camera buffer
+// ==================================================================
+// 1. SAFETY CORE (Prevents EXC_BAD_ACCESS)
+// ==================================================================
+
 + (UIImage *)safeDeepCopy:(UIImage *)image {
     if (!image) return nil;
-    // Use 'false' for opaque because NO is undefined in Obj-C++
-    UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale);
-    [image drawAtPoint:CGPointZero];
-    UIImage *copy = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return copy;
-}
-
-// Robust Point Ordering (Y-sort then X-sort)
-+ (NSArray<NSValue *> *)orderPoints:(NSArray<NSValue *> *)points {
-    if (points.count != 4) {
-        NSLog(@"Error: Exactly 4 points are required for ordering.");
+    @try {
+        // Drawing the image into a new context forces a deep memory copy,
+        // detaching it from the volatile camera buffer.
+        // Use 'false' instead of 'NO' to avoid C++ conflict.
+        UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale);
+        [image drawAtPoint:CGPointZero];
+        UIImage *copy = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+        return copy;
+    } @catch (NSException *exception) {
+        NSLog(@"[ImageUtilities] Deep Copy Failed: %@", exception);
         return nil;
     }
+}
 
-    // 1. Sort by Y (Top vs Bottom)
+// ==================================================================
+// 2. GEOMETRY / CROPPING
+// ==================================================================
+
++ (UIImage *)cropImage:(UIImage *)image toRect:(CGRect)rect {
+    if (!image) return nil;
+    if (rect.size.width <= 0 || rect.size.height <= 0) return nil;
+    
+    CGImageRef imageRef = CGImageCreateWithImageInRect(image.CGImage, rect);
+    UIImage *result = [UIImage imageWithCGImage:imageRef scale:image.scale orientation:image.imageOrientation];
+    CGImageRelease(imageRef);
+    return result;
+}
+
++ (NSArray<NSValue *> *)orderPoints:(NSArray<NSValue *> *)points {
+    if (points.count != 4) return points;
+
     NSArray *sortedByY = [points sortedArrayUsingComparator:^NSComparisonResult(NSValue *v1, NSValue *v2) {
         if ([v1 CGPointValue].y < [v2 CGPointValue].y) return NSOrderedAscending;
         return NSOrderedDescending;
@@ -77,149 +106,167 @@ cv::Mat concatImagesHorizontally(cv::Mat img1, cv::Mat img2) {
     NSMutableArray *topPoints = [NSMutableArray arrayWithObjects:sortedByY[0], sortedByY[1], nil];
     NSMutableArray *bottomPoints = [NSMutableArray arrayWithObjects:sortedByY[2], sortedByY[3], nil];
 
-    // 2. Sort Top by X (Left vs Right)
     [topPoints sortUsingComparator:^NSComparisonResult(NSValue *v1, NSValue *v2) {
         return [v1 CGPointValue].x < [v2 CGPointValue].x ? NSOrderedAscending : NSOrderedDescending;
     }];
 
-    // 3. Sort Bottom by X (Left vs Right)
     [bottomPoints sortUsingComparator:^NSComparisonResult(NSValue *v1, NSValue *v2) {
         return [v1 CGPointValue].x < [v2 CGPointValue].x ? NSOrderedAscending : NSOrderedDescending;
     }];
 
-    return @[topPoints[0], topPoints[1], bottomPoints[1], bottomPoints[0]]; // TL, TR, BR, BL
+    return @[topPoints[0], topPoints[1], bottomPoints[1], bottomPoints[0]];
 }
 
-#pragma mark - Perspective Warp
+// ==================================================================
+// 3. OPENCV OPERATIONS (Protected)
+// ==================================================================
 
 + (UIImage *)warpPerspective:(UIImage *)inputImage withPoints:(NSArray<NSValue *> *)points {
-    if (points.count != 4) return nil;
-    
-    NSArray<NSValue *> *orderedPointsNS = [ImageUtilities orderPoints:points];
-    
-    std::vector<cv::Point2f> orderedPoints;
-    for (NSValue *value in orderedPointsNS) {
-        CGPoint cgPoint = [value CGPointValue];
-        orderedPoints.push_back(cv::Point2f(cgPoint.x, cgPoint.y));
+    if (!inputImage || points.count != 4) return nil;
+
+    // SAFETY CHECK: Deep copy before OpenCV touches it
+    UIImage *safeInput = [self safeDeepCopy:inputImage];
+    if (!safeInput) return nil;
+
+    try {
+        NSArray *ordered = [self orderPoints:points];
+        
+        std::vector<cv::Point2f> src;
+        for (NSValue *val in ordered) {
+            CGPoint p = [val CGPointValue];
+            src.push_back(cv::Point2f(p.x, p.y));
+        }
+
+        float w = 900.0f;
+        float h = 500.0f;
+        
+        std::vector<cv::Point2f> dst;
+        dst.push_back(cv::Point2f(0, 0));
+        dst.push_back(cv::Point2f(w, 0));
+        dst.push_back(cv::Point2f(w, h));
+        dst.push_back(cv::Point2f(0, h));
+
+        cv::Mat mat;
+        UIImageToMat(safeInput, mat);
+        if (mat.empty()) return nil;
+
+        cv::Mat M = cv::getPerspectiveTransform(src, dst);
+        cv::Mat warped;
+        cv::warpPerspective(mat, warped, M, cv::Size(w, h));
+
+        return MatToUIImage(warped);
+    } catch (...) {
+        NSLog(@"[ImageUtilities] C++ Exception in warpPerspective");
+        return nil;
     }
+}
 
-    float width = 900.0;
-    float height = 450.0;
-    std::vector<cv::Point2f> dstPoints = {
-        cv::Point2f(0, 0), cv::Point2f(width, 0), cv::Point2f(width, height), cv::Point2f(0, height)
-    };
-
-    cv::Mat transformMatrix = cv::getPerspectiveTransform(orderedPoints, dstPoints);
++ (NSArray<NSValue *> *)detectScreenInImage:(UIImage *)inputImage {
+    if (!inputImage) return nil;
     
-    cv::Mat inputMat;
-    UIImageToMat(inputImage, inputMat);
-    if (inputMat.empty()) return nil;
+    // SAFETY CHECK: Deep copy is critical here!
+    // The camera buffer is volatile; we must detach the image data.
+    UIImage *safeInput = [self safeDeepCopy:inputImage];
+    if (!safeInput) return nil;
 
-    cv::Mat warpedMat;
-    cv::warpPerspective(inputMat, warpedMat, transformMatrix, cv::Size(width, height));
+    try {
+        cv::Mat img;
+        UIImageToMat(safeInput, img);
+        if (img.empty()) return nil;
 
-    return MatToUIImage(warpedMat);
+        cv::Mat gray, blur, thresh;
+        cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+        cv::GaussianBlur(gray, blur, cv::Size(5, 5), 0);
+        cv::threshold(blur, thresh, 0, 255, cv::THRESH_BINARY + cv::THRESH_OTSU);
+
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(thresh, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+        double maxArea = 0;
+        std::vector<cv::Point> bestContour;
+
+        for (const auto &c : contours) {
+            double area = cv::contourArea(c);
+            if (area > maxArea && area > 5000) {
+                double peri = cv::arcLength(c, true);
+                std::vector<cv::Point> approx;
+                cv::approxPolyDP(c, approx, 0.02 * peri, true);
+                
+                if (approx.size() == 4) {
+                    maxArea = area;
+                    bestContour = approx;
+                }
+            }
+        }
+
+        if (bestContour.size() == 4) {
+            NSMutableArray *points = [NSMutableArray array];
+            for (const auto &p : bestContour) {
+                [points addObject:[NSValue valueWithCGPoint:CGPointMake(p.x, p.y)]];
+            }
+            return points;
+        }
+    } catch (...) {
+        NSLog(@"[ImageUtilities] C++ Exception in detectScreen");
+    }
+    return nil;
 }
-
-#pragma mark - Crop & Save
-
-+ (UIImage *)cropImage:(UIImage *)inputImage toRect:(CGRect)rect {
-    CGImageRef croppedImageRef = CGImageCreateWithImageInRect(inputImage.CGImage, rect);
-    UIImage *croppedImage = [UIImage imageWithCGImage:croppedImageRef];
-    CGImageRelease(croppedImageRef);
-    return croppedImage;
-}
-
-+ (void)saveImageToDocuments:(UIImage *)image fileName:(NSString *)fileName {
-    if (!image) return;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        NSData *imageData = UIImagePNGRepresentation(image);
-        NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-        NSString *filePath = [documentsPath stringByAppendingPathComponent:fileName];
-        [imageData writeToFile:filePath atomically:YES];
-    });
-}
-
-#pragma mark - Image Processing (OpenCV)
 
 + (UIImage *)processImageForOCR:(UIImage *)inputImage
                regionOfInterest:(CGRect)roi
                       tightCrop:(bool)tightCrop
-                  addSuffixHack:(bool)useSuffixHack
-{
-    cv::Mat matImage;
-    UIImageToMat(inputImage, matImage);
-    if (matImage.empty()) return inputImage;
-
-    cv::Rect roiRect(roi.origin.x * matImage.cols,
-                     roi.origin.y * matImage.rows,
-                     roi.size.width * matImage.cols,
-                     roi.size.height * matImage.rows);
+                  addSuffixHack:(bool)useSuffixHack {
     
-    // Safety Bounds
-    roiRect.x = std::max(0, roiRect.x);
-    roiRect.y = std::max(0, roiRect.y);
-    roiRect.width = std::min(matImage.cols - roiRect.x, roiRect.width);
-    roiRect.height = std::min(matImage.rows - roiRect.y, roiRect.height);
+    if (!inputImage) return nil;
     
-    if (roiRect.width <= 0 || roiRect.height <= 0) return inputImage;
-    
-    cv::Mat roiMat = matImage(roiRect);
-    cv::Mat grayMat;
-    cv::cvtColor(roiMat, grayMat, cv::COLOR_BGR2GRAY);
+    try {
+        cv::Mat mat;
+        UIImageToMat(inputImage, mat);
+        if (mat.empty()) return inputImage;
 
-    cv::Mat normalizedMat;
-    cv::normalize(grayMat, normalizedMat, 0, 255, cv::NORM_MINMAX);
+        int x = roi.origin.x * mat.cols;
+        int y = roi.origin.y * mat.rows;
+        int w = roi.size.width * mat.cols;
+        int h = roi.size.height * mat.rows;
 
-    // Tight Crop Logic
-    if(tightCrop) {
-        cv::Mat thresholdMat;
-        cv::threshold(normalizedMat, thresholdMat, 75, 255, cv::THRESH_BINARY);
-        cv::Mat invertedMat;
-        cv::bitwise_not(thresholdMat, invertedMat);
+        x = std::max(0, x);
+        y = std::max(0, y);
+        w = std::min(mat.cols - x, w);
+        h = std::min(mat.rows - y, h);
+
+        if (w <= 0 || h <= 0) return inputImage;
+
+        cv::Rect roiRect(x, y, w, h);
+        cv::Mat roiMat = mat(roiRect).clone();
+
+        cv::Mat gray;
+        cv::cvtColor(roiMat, gray, cv::COLOR_BGR2GRAY);
         
-        std::vector<std::vector<cv::Point>> contours;
-        cv::findContours(invertedMat, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        cv::Mat normalized;
+        cv::normalize(gray, normalized, 0, 255, cv::NORM_MINMAX);
+        
+        cv::cvtColor(normalized, roiMat, cv::COLOR_GRAY2BGR);
 
-        if (!contours.empty()) {
-            double largestArea = 0.0;
-            int largestContourIndex = 0;
-            for (size_t i = 0; i < contours.size(); i++) {
-                double area = cv::contourArea(contours[i]);
-                if (area > largestArea) {
-                    largestArea = area;
-                    largestContourIndex = i;
-                }
+        if (useSuffixHack) {
+            static cv::Mat suffixMat;
+            if (suffixMat.empty()) {
+                suffixMat = loadImageFromAssets(@"decimal-suffix-helper2.png");
             }
-            cv::Rect boundingBox = cv::boundingRect(contours[largestContourIndex]);
-            
-            int margin = 5;
-            boundingBox.x = std::max(0, boundingBox.x - margin);
-            boundingBox.y = std::max(0, boundingBox.y - margin);
-            boundingBox.width = std::min(roiMat.cols - boundingBox.x, boundingBox.width + 2 * margin);
-            boundingBox.height = std::min(roiMat.rows - boundingBox.y, boundingBox.height + 2 * margin);
-            
-            cv::Mat croppedMat = normalizedMat(boundingBox);
-            normalizedMat = croppedMat.clone();
+            if (!suffixMat.empty()) {
+                roiMat = concatImagesHorizontally(roiMat, suffixMat);
+            }
         }
+
+        return MatToUIImage(roiMat);
+    } catch (...) {
+        NSLog(@"[ImageUtilities] Exception in processImageForOCR");
+        return inputImage;
     }
-    
-    cv::cvtColor(normalizedMat, roiMat, cv::COLOR_GRAY2BGR);
-    
-    if(useSuffixHack) {
-        static cv::Mat suffixImage;
-        if(suffixImage.empty()) suffixImage = loadImageFromAssets(@"decimal-suffix-helper2.png");
-        
-        if (!suffixImage.empty()) {
-            cv::Mat temp = concatImagesHorizontally(suffixImage, roiMat);
-            roiMat = concatImagesHorizontally(temp, suffixImage);
-        }
-    }
-    
-    return MatToUIImage(roiMat);
 }
 
-#pragma mark - OCR & ML
+// ==================================================================
+// 4. VISION / COREML
+// ==================================================================
 
 + (NSString *)performOCR:(UIImage *)inputImage
         regionOfInterest:(CGRect)roi
@@ -227,161 +274,126 @@ cv::Mat concatImagesHorizontally(cv::Mat img1, cv::Mat img2) {
            addSuffixHack:(bool)useSuffixHack
         recognitionLevel:(VNRequestTextRecognitionLevel)recognitionLevel
           processedImage:(UIImage **)processedResult
-                   error:(NSError **)error
-{
-    UIImage* processedImage = [ImageUtilities processImageForOCR:inputImage regionOfInterest:roi tightCrop:false addSuffixHack:useSuffixHack];
+                   error:(NSError **)error {
     
-    // SAFETY: Deep copy
-    UIImage *safeImage = [ImageUtilities safeDeepCopy:processedImage];
-    if(processedResult) *processedResult = safeImage;
+    UIImage *safeImage = [self safeDeepCopy:inputImage];
+    if (!safeImage) return nil;
+
+    UIImage *preparedImage = [self processImageForOCR:safeImage
+                                     regionOfInterest:roi
+                                            tightCrop:false
+                                        addSuffixHack:useSuffixHack];
     
-    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:safeImage.CGImage options:@{}];
+    if (processedResult) {
+        *processedResult = preparedImage;
+    }
+    
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
     request.recognitionLevel = recognitionLevel;
-    
-    if (customWords.count > 0) {
-        request.customWords = customWords;
-        request.usesLanguageCorrection = 1;
-    } else {
-        request.usesLanguageCorrection = 0;
-    }
-    
-    request.minimumTextHeight = 0.5;
+    request.usesLanguageCorrection = (customWords.count > 0);
+    request.customWords = customWords;
     request.recognitionLanguages = @[@"en-US"];
+    request.minimumTextHeight = 0.5;
+    
+    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:preparedImage.CGImage options:@{}];
     
     [handler performRequests:@[request] error:error];
-    if (*error) return nil;
+    if (error && *error) return nil;
     
-    NSMutableString *recognizedText = [NSMutableString string];
-    for (VNRecognizedTextObservation *observation in request.results) {
-        [recognizedText appendString:[observation topCandidates:1].firstObject.string];
-        [recognizedText appendString:@"\n"];
+    NSMutableString *fullText = [NSMutableString string];
+    for (VNRecognizedTextObservation *obs in request.results) {
+        NSArray *candidates = [obs topCandidates:1];
+        if (candidates.count > 0) {
+            VNRecognizedText *top = candidates.firstObject;
+            [fullText appendString:top.string];
+        }
     }
     
-    return [recognizedText copy];
+    return [fullText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 }
 
-+ (NSString*)runInference:(UIImage *)image
-                    model:(VNCoreMLModel*) model
-         regionOfInterest:(CGRect)roi
-                confidenc:(float*)confidence
-           processedImage:(UIImage **)processedResult
-                    error:(NSError **)error {
++ (NSString *)runInference:(UIImage *)image
+                     model:(VNCoreMLModel *)model
+          regionOfInterest:(CGRect)roi
+                confidenc:(float *)confidence
+            processedImage:(UIImage **)processedResult
+                     error:(NSError **)error {
     
-    UIImage* processedImage = [ImageUtilities processImageForOCR:image regionOfInterest:roi tightCrop:false addSuffixHack:false];
-    UIImage *safeImage = [ImageUtilities safeDeepCopy:processedImage];
+    UIImage *safeImage = [self safeDeepCopy:image];
+    if (!safeImage) return nil;
+
+    UIImage *cropped = [self processImageForOCR:safeImage
+                               regionOfInterest:roi
+                                      tightCrop:false
+                                  addSuffixHack:false];
     
-    if(processedResult) *processedResult = safeImage;
-    
+    if (processedResult) *processedResult = cropped;
+
     VNCoreMLRequest *request = [[VNCoreMLRequest alloc] initWithModel:model];
-    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:safeImage.CGImage options:@{}];
-    BOOL success = [handler performRequests:@[request] error:error];
+    request.imageCropAndScaleOption = VNImageCropAndScaleOptionScaleFill;
+
+    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:cropped.CGImage options:@{}];
     
-    if ((!success || error) && *error) return nil;
+    BOOL success = [handler performRequests:@[request] error:error];
+    if (!success) return nil;
 
     if (request.results.count > 0) {
-        id firstResult = request.results.firstObject;
-        if ([firstResult isKindOfClass:[VNClassificationObservation class]]) {
-            VNClassificationObservation *topResult = (VNClassificationObservation *)firstResult;
-            if (confidence) *confidence = topResult.confidence;
-            return topResult.identifier;
+        VNObservation *obs = request.results.firstObject;
+        if ([obs isKindOfClass:[VNClassificationObservation class]]) {
+            VNClassificationObservation *classObs = (VNClassificationObservation *)obs;
+            if (confidence) *confidence = classObs.confidence;
+            return classObs.identifier;
         }
     }
     return nil;
 }
 
-#pragma mark - Screen Detection
+// ==================================================================
+// 5. DEBUG DRAWING
+// ==================================================================
 
-+ (NSArray<NSValue *> *)detectScreenInImage:(UIImage *)inputImage {
-    cv::Mat imageMat;
-    UIImageToMat(inputImage, imageMat);
-    if (imageMat.empty()) return nil;
-
-    cv::Mat grayMat;
-    cv::cvtColor(imageMat, grayMat, cv::COLOR_BGR2GRAY);
-
-    cv::Mat normalizedMat;
-    cv::normalize(grayMat, normalizedMat, 0, 255, cv::NORM_MINMAX);
-
-    cv::Mat threshMat;
-    cv::threshold(normalizedMat, threshMat, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-
-    cv::Mat openedMat;
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(11, 11));
-    cv::morphologyEx(threshMat, openedMat, cv::MORPH_OPEN, kernel);
-
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(openedMat, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-    for (const std::vector<cv::Point> &contour : contours) {
-        double epsilon = 0.02 * cv::arcLength(contour, true);
-        std::vector<cv::Point> approxPolygon;
-        cv::approxPolyDP(contour, approxPolygon, epsilon, true);
-
-        if (approxPolygon.size() == 4) {
-            NSMutableArray<NSValue *> *polygonPoints = [NSMutableArray array];
-            for (const cv::Point &point : approxPolygon) {
-                [polygonPoints addObject:[NSValue valueWithCGPoint:CGPointMake(point.x, point.y)]];
-            }
-            return polygonPoints;
-        }
-    }
-    return nil;
-}
-
-#pragma mark - Restored Drawing Helpers
-
-+ (UIImage *)convertToGrayscale:(UIImage *)inputImage {
-    CIImage *ciImage = [[CIImage alloc] initWithImage:inputImage];
-    CIFilter *grayscaleFilter = [CIFilter filterWithName:@"CIColorControls"];
-    [grayscaleFilter setValue:ciImage forKey:kCIInputImageKey];
-    [grayscaleFilter setValue:@0.0 forKey:@"inputSaturation"];
++ (UIImage *)drawRectangleOnImage:(UIImage *)image rectangle:(CGRect)rect color:(UIColor *)color thickness:(CGFloat)thickness {
+    if (!image) return nil;
     
-    CIImage *outputCIImage = grayscaleFilter.outputImage;
-    if (!outputCIImage) return nil;
-    
-    CIContext *context = [CIContext contextWithOptions:nil];
-    CGImageRef cgImage = [context createCGImage:outputCIImage fromRect:outputCIImage.extent];
-    UIImage *outputImage = [UIImage imageWithCGImage:cgImage];
-    CGImageRelease(cgImage);
-    return outputImage;
-}
-
-+ (UIImage *)drawRectangleOnImage:(UIImage *)inputImage
-                        rectangle:(CGRect)rectangle
-                            color:(UIColor *)color
-                        thickness:(CGFloat)thickness {
-    // FIX: Use 'false' for C++ compatibility
-    UIGraphicsBeginImageContextWithOptions(inputImage.size, false, inputImage.scale);
-    [inputImage drawAtPoint:CGPointZero];
+    UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale);
+    [image drawAtPoint:CGPointZero];
     
     CGContextRef context = UIGraphicsGetCurrentContext();
     CGContextSetStrokeColorWithColor(context, color.CGColor);
     CGContextSetLineWidth(context, thickness);
-    CGContextStrokeRect(context, rectangle);
+    CGContextStrokeRect(context, rect);
     
-    UIImage *outputImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
-    return outputImage;
+    return result;
 }
 
-+ (UIImage *)drawCircleOnImage:(UIImage *)inputImage
-                        center:(CGPoint)center
-                        radius:(CGFloat)radius
-                         color:(UIColor *)color
-                     thickness:(CGFloat)thickness {
-    // FIX: Use 'false' for C++ compatibility
-    UIGraphicsBeginImageContextWithOptions(inputImage.size, false, inputImage.scale);
-    [inputImage drawAtPoint:CGPointZero];
++ (UIImage *)drawCircleOnImage:(UIImage *)image center:(CGPoint)center radius:(CGFloat)radius color:(UIColor *)color thickness:(CGFloat)thickness {
+    if (!image) return nil;
+    
+    UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale);
+    [image drawAtPoint:CGPointZero];
     
     CGContextRef context = UIGraphicsGetCurrentContext();
     CGContextSetStrokeColorWithColor(context, color.CGColor);
     CGContextSetLineWidth(context, thickness);
-    CGContextStrokeEllipseInRect(context, CGRectMake(center.x - radius, center.y - radius, radius * 2, radius * 2));
     
-    UIImage *outputImage = UIGraphicsGetImageFromCurrentImageContext();
+    CGRect circleRect = CGRectMake(center.x - radius, center.y - radius, radius * 2, radius * 2);
+    CGContextStrokeEllipseInRect(context, circleRect);
+    
+    UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
-    return outputImage;
+    return result;
+}
+
++ (void)saveImageToDocuments:(UIImage *)image fileName:(NSString *)fileName {
+    if (!image || !fileName) return;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *filePath = [[paths firstObject] stringByAppendingPathComponent:fileName];
+        [UIImagePNGRepresentation(image) writeToFile:filePath atomically:YES];
+        NSLog(@"[ImageUtilities] Saved debug image: %@", fileName);
+    });
 }
 
 @end
