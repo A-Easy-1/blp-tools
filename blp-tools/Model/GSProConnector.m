@@ -1,6 +1,8 @@
 #import "GSProConnector.h"
+#import "DataModel.h"            // <--- Added
+#import "ScreenDataProcessor.h"  // <--- Added for Notification Names
 
-NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotification"; // Notification name
+NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotification";
 
 @interface GSProConnector ()
 @property (nonatomic, strong) NSInputStream *inputStream;
@@ -14,7 +16,6 @@ NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotifi
 @property (nonatomic, assign) NSTimeInterval lastClubTimestamp;
 
 @property (nonatomic, strong) NSString *connectionState;
-
 @end
 
 @implementation GSProConnector
@@ -36,11 +37,10 @@ NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotifi
         return;
     }
     
-    NSString *ipPattern =
-        @"^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\."
-         "(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\."
-         "(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\."
-         "(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$";
+    NSString *ipPattern = @"^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\."
+                           "(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\."
+                           "(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\."
+                           "(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$";
     NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:ipPattern options:0 error:nil];
     NSUInteger matches = [regex numberOfMatchesInString:ip options:0 range:NSMakeRange(0, ip.length)];
     if (matches == 0) {
@@ -52,8 +52,13 @@ NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotifi
     self.serverPort = port;
     
     [self postConnectionNotification:@"Connecting"];
-    
     [self openConnection];
+}
+
+- (BOOL)isConnected {
+    if (!self.outputStream) return NO;
+    NSStreamStatus status = [self.outputStream streamStatus];
+    return (status == NSStreamStatusOpen || status == NSStreamStatusWriting || status == NSStreamStatusReading);
 }
 
 - (void)disconnect {
@@ -67,39 +72,27 @@ NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotifi
                                 clubData:(NSDictionary *)clubData
                               shotNumber:(int)shotNumber
                                    error:(NSError **)error {
-    // Build a dictionary according to the API spec.
     NSMutableDictionary *dict = [NSMutableDictionary dictionary];
-
     dict[@"DeviceID"] = @"BLP Tools";
     dict[@"Units"] = @"Yards";
     dict[@"ShotNumber"] = @(shotNumber);
     dict[@"APIversion"] = @"1";
-    if (ballData) {
-        dict[@"BallData"] = ballData;
-    }
-    if (clubData) {
-        dict[@"ClubData"] = clubData;
-    }
+    if (ballData) dict[@"BallData"] = ballData;
+    if (clubData) dict[@"ClubData"] = clubData;
     dict[@"ShotDataOptions"] = @{
-        @"ContainsBallData": @(ballData != nil),  // required
-        @"ContainsClubData": @(clubData != nil),   // required
-        @"LaunchMonitorIsReady": @YES,  // not required
-        @"LaunchMonitorBallDetected": @YES,  // not required
-        @"IsHeartBeat": @NO  // not required
+        @"ContainsBallData": @(ballData != nil),
+        @"ContainsClubData": @(clubData != nil),
+        @"LaunchMonitorIsReady": @YES,
+        @"LaunchMonitorBallDetected": @YES,
+        @"IsHeartBeat": @NO
     };
     
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:dict options:NSJSONWritingPrettyPrinted error:(error ? error : NULL)];
-    if (!jsonData) {
-        return nil;
-    }
-    
+    if (!jsonData) return nil;
     return [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
 }
 
-
-- (void)sendShotWithBallData:(NSDictionary *)ballData
-                    clubData:(NSDictionary *)clubData
-                  shotNumber:(int)shotNumber {
+- (void)sendShotWithBallData:(NSDictionary *)ballData clubData:(NSDictionary *)clubData shotNumber:(int)shotNumber {
     if (!self.isConnected || !self.outputStream) {
         NSLog(@"Not connected to server. Unable to send data.");
         return;
@@ -107,30 +100,21 @@ NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotifi
     
     NSTimeInterval now = [NSDate.date timeIntervalSince1970];
     if (ballData) {
-        if ((now - self.lastBallTimestamp) < 2.0) {
-            return;
-        }
+        if ((now - self.lastBallTimestamp) < 2.0) return;
         self.lastBallTimestamp = now;
     } else if (clubData) {
-        if ((now - self.lastClubTimestamp) < 2.0) {
-            return;
-        }
+        if ((now - self.lastClubTimestamp) < 2.0) return;
         self.lastClubTimestamp = now;
     }
     
-    
     NSError *jsonError = nil;
-    NSString *jsonString = [self createShotJsonWithBallData:ballData
-                                                   clubData:clubData
-                                                 shotNumber:0
-                                                      error:&jsonError];
+    NSString *jsonString = [self createShotJsonWithBallData:ballData clubData:clubData shotNumber:0 error:&jsonError];
     if (!jsonString) {
         NSLog(@"Error generating JSON for GSPro: %@", jsonError);
         return;
     }
     
     NSData *data = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
-    
     if ([self.outputStream hasSpaceAvailable]) {
         NSInteger bytesWritten = [self.outputStream write:data.bytes maxLength:data.length];
         if (bytesWritten == -1) {
@@ -148,12 +132,7 @@ NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotifi
 - (void)openConnection {
     CFReadStreamRef readStream = NULL;
     CFWriteStreamRef writeStream = NULL;
-    
-    CFStreamCreatePairWithSocketToHost(NULL,
-                                       (__bridge CFStringRef)self.serverIP,
-                                       (UInt32)self.serverPort,
-                                       &readStream,
-                                       &writeStream);
+    CFStreamCreatePairWithSocketToHost(NULL, (__bridge CFStringRef)self.serverIP, (UInt32)self.serverPort, &readStream, &writeStream);
     
     if (!readStream || !writeStream) {
         NSLog(@"Error: Could not create stream pair.");
@@ -164,16 +143,12 @@ NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotifi
     
     self.inputStream = (__bridge_transfer NSInputStream *)readStream;
     self.outputStream = (__bridge_transfer NSOutputStream *)writeStream;
-    
     self.inputStream.delegate = self;
     self.outputStream.delegate = self;
-    
     [self.inputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
     [self.outputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
-    
     [self.inputStream open];
     [self.outputStream open];
-    
     NSLog(@"Attempting to connect to %@:%ld", self.serverIP, (long)self.serverPort);
 }
 
@@ -184,7 +159,6 @@ NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotifi
         self.inputStream.delegate = nil;
         self.inputStream = nil;
     }
-    
     if (self.outputStream) {
         [self.outputStream close];
         [self.outputStream removeFromRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
@@ -193,50 +167,33 @@ NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotifi
     }
 }
 
-#pragma mark - NSStreamDelegate
-
 - (void)stream:(NSStream *)aStream handleEvent:(NSStreamEvent)eventCode {
     switch (eventCode) {
         case NSStreamEventOpenCompleted:
             if (aStream == self.outputStream) {
-                NSLog(@"Output stream opened.");
                 self.isConnected = YES;
                 [self invalidateReconnectTimer];
-                
                 [self postConnectionNotification:@"Connected"];
             }
             break;
-            
         case NSStreamEventErrorOccurred:
             NSLog(@"Stream error: %@", aStream.streamError);
             [self disconnect];
             [self scheduleReconnect];
             break;
-            
         case NSStreamEventEndEncountered:
             NSLog(@"Stream end encountered.");
             [self disconnect];
             [self scheduleReconnect];
             break;
-            
-        default:
-            break;
+        default: break;
     }
 }
 
-#pragma mark - Reconnect Logic
-
 - (void)scheduleReconnect {
-    if (self.reconnectTimer) {
-        return;
-    }
-    
+    if (self.reconnectTimer) return;
     NSLog(@"Scheduling reconnect in 10 seconds...");
-    self.reconnectTimer = [NSTimer scheduledTimerWithTimeInterval:10.0
-                                                           target:self
-                                                         selector:@selector(reconnectTimerFired:)
-                                                         userInfo:nil
-                                                          repeats:NO];
+    self.reconnectTimer = [NSTimer scheduledTimerWithTimeInterval:10.0 target:self selector:@selector(reconnectTimerFired:) userInfo:nil repeats:NO];
 }
 
 - (void)reconnectTimerFired:(NSTimer *)timer {
@@ -251,16 +208,11 @@ NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotifi
     }
 }
 
-#pragma mark - Notifications
-
 - (void)postConnectionNotification:(NSString *)stateString {
     self.connectionState = [stateString copy];
     NSDictionary *userInfo = @{ @"connectionState": stateString };
-    [[NSNotificationCenter defaultCenter] postNotificationName:GSProConnectionStateNotification
-                                                        object:nil
-                                                      userInfo:userInfo];
+    [[NSNotificationCenter defaultCenter] postNotificationName:GSProConnectionStateNotification object:nil userInfo:userInfo];
 }
-
 
 - (NSString *)getConnectionState {
     return self.connectionState;

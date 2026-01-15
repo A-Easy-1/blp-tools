@@ -10,9 +10,9 @@ extern NSString * const ScreenDataProcessorNewClubDataNotification;
 
 @interface ScreenDataProcessor : NSObject
 
+@property (nonatomic, strong) ScreenReader *screenSelectionReader;
 @property (nonatomic, strong) ScreenReader *ballDataReader;
 @property (nonatomic, strong) ScreenReader *clubDataReader;
-@property (nonatomic, strong) ScreenReader *screenSelectionReader;
 
 - (void)processScreenDataFromImage:(UIImage *)rawImage
                              error:(NSError **)error;

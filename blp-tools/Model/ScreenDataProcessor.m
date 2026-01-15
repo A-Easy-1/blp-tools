@@ -6,6 +6,8 @@
 #import "Constants.h"
 #import <math.h>
 
+// NOTE: Connectors removed. This class only READS data. DataModel handles SENDING data.
+
 NSString * const ScreenDataProcessorNewCornersNotification = @"ScreenDataProcessorNewCornersNotification";
 NSString * const ScreenDataProcessorNewBallDataNotification = @"ScreenDataProcessorNewBallDataNotification";
 NSString * const ScreenDataProcessorNewClubDataNotification = @"ScreenDataProcessorNewClubDataNotification";
@@ -46,7 +48,7 @@ static NSString* validateBallData(NSDictionary *data) {
     NSString *carryUnits = [validCarryUnits containsObject:data[@"carry-units"]] ? data[@"carry-units"] : @"";
     int totalSpin = toInt(data[@"total-spin"]);
     int spinAxis = toInt(data[@"spin-axis"]);
-    NSString *spinAxisDirection = [validDirection containsObject:data[@"spin-axis-direction"]] ? data[@"spin-axis-direction"] : @"";
+    // NSString *spinAxisDirection = [validDirection containsObject:data[@"spin-axis-direction"]] ? data[@"spin-axis-direction"] : @"";
     
     // Top level validation logic
     if(ballSpeed == 0)
@@ -70,25 +72,7 @@ static NSString* validateBallData(NSDictionary *data) {
 }
 
 static NSString* validateClubData(NSDictionary *data) {
-    NSSet *validSpeedUnits = [NSSet setWithObjects:@"MPH", @"MPS", @"KMH", nil];
-    NSSet *validPathDirection = [NSSet setWithObjects:@"IN-OUT", @"OUT-IN", nil];
-    NSSet *validAOADirection = [NSSet setWithObjects:@"UP", @"DOWN", nil];
-    
-    double clubSpeed = toDouble(data[@"club-speed"]);
-    NSString *clubSpeedUnits = [validSpeedUnits containsObject:data[@"club-speed-units"]] ? data[@"club-speed-units"] : @"";
-    double efficiency = toDouble(data[@"efficiency"]);
-    NSString *pathDirection = [validPathDirection containsObject:data[@"path-direction"]] ? data[@"path-direction"] : @"";
-    double path = toDouble(data[@"path"]);
-    NSString *aoaDirection = [validAOADirection containsObject:data[@"aoa-direction"]] ? data[@"aoa-direction"] : @"";
-    double aoa = toInt(data[@"aoa"]);
-    
-    // Top level validation logic
-//    if (clubSpeed == 0 || [clubSpeedUnits isEqualToString:@"None"] || efficiency == 0 || [pathDirection isEqualToString:@"None"] || path == 0 || [aoaDirection isEqualToString:@"None"] || aoa == 0) {
-//        return @"invalid";
-//    } else {
-//        return @"club";
-//    }
-    
+    // Top level validation logic (Currently permissive)
     return @"club";
 }
 
@@ -145,8 +129,7 @@ static NSDictionary* translateClubResults(NSDictionary* clubResults) {
     NSMutableDictionary *processedResults = [NSMutableDictionary dictionary];
 
     processedResults[@"Speed"] = @([clubResults[@"club-speed"] floatValue]);
-    NSString *clubSpeedUnits = clubResults[@"club-speed-units"] ?: @"";
-    //TODO: Handle MPH/KPH/MPS
+    // NSString *clubSpeedUnits = clubResults[@"club-speed-units"] ?: @"";
 
     NSString *aoaDirection = clubResults[@"aoa-direction"] ?: @"";
     float aoa = [clubResults[@"aoa"] floatValue];
@@ -168,6 +151,7 @@ static NSDictionary* translateClubResults(NSDictionary* clubResults) {
     
     processedResults[@"Efficiency"] = @([clubResults[@"efficiency"] floatValue]);
     
+    // Placeholders for data not currently read by OCR
     processedResults[@"FaceToTarget"] = @0.0;
     processedResults[@"Lie"] = @0.0;
     processedResults[@"Loft"] = @0.0;
@@ -180,7 +164,7 @@ static NSDictionary* translateClubResults(NSDictionary* clubResults) {
 }
 
 
-
+// --- CLASS EXTENSION / PRIVATE INTERFACE ---
 @interface ScreenDataProcessor ()
 
 @property (nonatomic, assign) NSTimeInterval lastDetectionTime;
@@ -188,10 +172,17 @@ static NSDictionary* translateClubResults(NSDictionary* clubResults) {
 @property (nonatomic, strong) NSDictionary* lastBallData;
 @property (nonatomic, strong) NSDictionary* lastClubData;
 
+// Added property for tracking Club Screen time
+@property (nonatomic, assign) NSTimeInterval lastClubDetectionTime;
+
 @property (nonatomic, strong) NSubmissionValidator* ballDataValidator;
 @property (nonatomic, strong) NSubmissionValidator* clubDataValidator;
 
+@property (nonatomic, assign) NSTimeInterval lastOCRTime;
+
 @end
+// -------------------------------------------
+
 
 @implementation ScreenDataProcessor
 
@@ -206,12 +197,15 @@ static NSDictionary* translateClubResults(NSDictionary* clubResults) {
         
         _ballDataReader = [[ScreenReader alloc] initWithJSONFile:ballPath type:@"ball-data" error:&error];
         if (error) { NSLog(@"Error loading ballDataReader: %@", error); }
+        
         _clubDataReader = [[ScreenReader alloc] initWithJSONFile:clubPath type:@"club-data" error:&error];
         if (error) { NSLog(@"Error loading clubDataReader: %@", error); }
+        
         _screenSelectionReader = [[ScreenReader alloc] initWithJSONFile:screenPath type:@"screen-data" error:&error];
         if (error) { NSLog(@"Error loading screenSelectionReader: %@", error); }
         
         _lastDetectionTime = 0;
+        _lastClubDetectionTime = 0; // Initialize our new timer
         _lastBallData = nil;
         _lastClubData = nil;
         
@@ -225,100 +219,105 @@ static NSDictionary* translateClubResults(NSDictionary* clubResults) {
     
     NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
     
-    // Rate-limit screen detection to once every 5 seconds.
+    // --- 1. DYNAMIC EFFICIENCY CONTROL ---
+    double fps = [[NSUserDefaults standardUserDefaults] doubleForKey:@"camera_fps"];
+    if (fps < 2.0) fps = 2.0; // Safety floor: Never go below 2 FPS
+    
+    double throttleInterval = 1.0 / fps;
+    
+    if (currentTime - self.lastOCRTime < throttleInterval) {
+        return; // Too soon! Skip this frame to save CPU.
+    }
+    self.lastOCRTime = currentTime;
+    
+    // --- 2. INTELLIGENT DETECTION (The "Gatekeeper") ---
     if (!self.detectedCorners || (currentTime - self.lastDetectionTime) >= 5.0) {
+        
         NSArray<NSValue *> *foundCorners = [ImageUtilities detectScreenInImage:rawImage];
-        if (!foundCorners || foundCorners.count != 4) {
-            if (error) {
-                *error = [NSError errorWithDomain:@"ScreenDataProcessorErrorDomain"
-                                             code:100
-                                         userInfo:@{NSLocalizedDescriptionKey: @"Screen corner detection failed"}];
-            }
-            return;
+        
+        if (foundCorners && foundCorners.count == 4) {
+            // Success: We found a screen. Lock it in.
+            self.detectedCorners = [foundCorners copy];
+            self.lastDetectionTime = currentTime;
+            
+            // Notify UI to draw the green box
+            [[NSNotificationCenter defaultCenter] postNotificationName:ScreenDataProcessorNewCornersNotification
+                                                                object:nil
+                                                              userInfo:@{@"corners": self.detectedCorners}];
+        } else {
+            // Failure: Screen is blocked or camera moved.
+            self.detectedCorners = nil;
+            
+            // Notify UI to hide the green box
+             [[NSNotificationCenter defaultCenter] postNotificationName:ScreenDataProcessorNewCornersNotification
+                                                                 object:nil
+                                                               userInfo:@{}];
         }
-        
-        self.detectedCorners = [foundCorners copy];
-        self.lastDetectionTime = currentTime;
-        
-        // Notify that new corners were detected
-        NSDictionary *userInfo = @{@"corners": self.detectedCorners};
-        [[NSNotificationCenter defaultCenter] postNotificationName:ScreenDataProcessorNewCornersNotification
-                                                            object:nil
-                                                          userInfo:userInfo];
     }
     
-    // Warp the raw image using the detected corners.
+    // --- 3. THE STOP SIGN ---
+    if (!self.detectedCorners) {
+        return;
+    }
+    
+    // 2. Warp Image
     UIImage *warpedImage = [ImageUtilities warpPerspective:rawImage withPoints:self.detectedCorners];
-    if (!warpedImage) {
-        if (error) {
-            *error = [NSError errorWithDomain:@"ScreenDataProcessorErrorDomain"
-                                         code:101
-                                     userInfo:@{NSLocalizedDescriptionKey: @"Warping image failed"}];
-        }
-        return;
-    }
+    if (!warpedImage) return;
     
-    // Use the screenSelectionReader to determine which screen is active.
+    // 3. Determine Screen Type (Ball vs Club)
     NSDictionary *selectionResults = [self.screenSelectionReader runOCROnImage:warpedImage error:error];
-    if (*error)
-        return;
+    if (*error) return;
     
-    // Expected keys (per your design) might be "ball-screen-pattern" and "club-screen-pattern".
     NSString *ballPattern = selectionResults[@"ball-screen-pattern"] ?: @"";
     NSString *clubPattern = selectionResults[@"club-screen-pattern"] ?: @"";
     
     bool ballScreenDetected = [ballPattern isEqualToString:@"SPEED"];
     bool clubScreenDetected = [clubPattern isEqualToString:@"SPEED"];
     
-    // Process with the corresponding OCR.
-    NSDictionary *result = nil;
+    // CASE A: BALL SCREEN DETECTED
     if (ballScreenDetected && !clubScreenDetected) {
-        result = [self.ballDataReader runOCROnImage:warpedImage error:error];
-        if (*error)
-            return;
+        NSDictionary *result = [self.ballDataReader runOCROnImage:warpedImage error:error];
+        if (*error) return;
         
         NSString* kind = validateBallData(result);
-        
-        if(![kind isEqualToString:@"shot"] && ![kind isEqualToString:@"putt"] ) {
-            NSLog(@"Invaid shot detected: %@ \n %@", kind, result);
-            return;
-        }
+        if(![kind isEqualToString:@"shot"] && ![kind isEqualToString:@"putt"] ) return;
         
         bool isPutt = [kind isEqualToString:@"putt"];
         NSDictionary* translatedResults = translateBallResults(result, isPutt);
         
         if([self.ballDataValidator validateDictionary:translatedResults]) {
-            // Notify of new ball results
+            
+            // --- REMOVED SENDING LOGIC ---
+            // The DataModel listens for this notification and handles the sending (Routing to OGS/GSPro).
+            
             NSDictionary *userInfo = @{@"image": warpedImage, @"data": translatedResults};
             [[NSNotificationCenter defaultCenter] postNotificationName:ScreenDataProcessorNewBallDataNotification
                                                                 object:nil
                                                               userInfo:userInfo];
+            
             self.lastBallData = [translatedResults copy];
         }
-    } else if (!ballScreenDetected && clubScreenDetected) {
-        result = [self.clubDataReader runOCROnImage:warpedImage error:error];
-        if (*error)
-            return;
+    }
+    // CASE B: CLUB SCREEN DETECTED
+    else if (!ballScreenDetected && clubScreenDetected) {
+        NSDictionary *result = [self.clubDataReader runOCROnImage:warpedImage error:error];
+        if (*error) return;
         
         NSString* kind = validateClubData(result);
-        if([kind isEqualToString:@"invalid"]) {
-            NSLog(@"Invaid club data detected: %@ \n %@", kind, result);
-            return;
-        }
+        if([kind isEqualToString:@"invalid"]) return;
         
         NSDictionary* translatedResults = translateClubResults(result);
     
         if([self.clubDataValidator validateDictionary:translatedResults]) {
-            // Notify of new club results
+            self.lastClubData = [translatedResults copy];
+            self.lastClubDetectionTime = currentTime;
+            
+            // Just notify. DataModel will handle sending.
             NSDictionary *userInfo = @{@"image": warpedImage, @"data": translatedResults};
             [[NSNotificationCenter defaultCenter] postNotificationName:ScreenDataProcessorNewClubDataNotification
                                                                 object:nil
                                                               userInfo:userInfo];
-            self.lastClubData = [translatedResults copy];
         }
-    } else {
-        //NSLog(@"Neither screen detected");
-        // Nothing to do, not a screen we are interested in
     }
 }
 

@@ -21,6 +21,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, strong, nullable) NSDictionary *currentShotClubData;
 @property (nonatomic, strong, nullable) UIImage *currentShotClubImage;
 
+- (void)setProcessingPaused:(BOOL)paused;
+
 @end
 
 NS_ASSUME_NONNULL_END

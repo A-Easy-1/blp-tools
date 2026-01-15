@@ -1,36 +1,39 @@
-//
-//  MiniGameSettingsViewController.m
-//
-//  Example implementation with two separate saved states:
-//  1) “Swings” settings
-//  2) “Putting” settings
-//
-
 #import "MiniGameSettingsViewController.h"
 #import "Theme.h"
 #import "MiniGameManager.h"
-#import "MiniGameSettingsStore.h" // <-- Make sure this matches your actual store class name
+#import "MiniGameSettingsStore.h"
+#import "DataModel.h"
 
 @interface MiniGameSettingsViewController () <UIPickerViewDelegate, UIPickerViewDataSource, UITextFieldDelegate>
 
-// Left side: instructions
+// Layout
+@property (nonatomic, strong) UIStackView *mainStack;
+@property (nonatomic, strong) UIStackView *formStack;
+
+// UI
 @property (nonatomic, strong) UITextView *instructionsTextView;
-
-// Right side: non-scrollable view with form controls
-@property (nonatomic, strong) UIView *formView;
-
-// Controls
 @property (nonatomic, strong) UISegmentedControl *typeSegment;
+
+// Skill Section (Nested Stack for clean hiding)
+@property (nonatomic, strong) UIStackView *skillStack;
+@property (nonatomic, strong) UILabel *skillLabel;
+@property (nonatomic, strong) UITextField *skillField;
+
+// Distances
 @property (nonatomic, strong) UITextField *minDistanceField;
 @property (nonatomic, strong) UITextField *maxDistanceField;
+
+// Other
 @property (nonatomic, strong) UISegmentedControl *formatSegment;
 @property (nonatomic, strong) UITextField *numShotsField;
-@property (nonatomic, strong) UIPickerView *shotsPicker;
-@property (nonatomic, strong) NSArray<NSNumber *> *shotsOptions;
-
-// Buttons (styled like miniGameButton)
 @property (nonatomic, strong) UIButton *cancelButton;
 @property (nonatomic, strong) UIButton *okButton;
+
+// Pickers
+@property (nonatomic, strong) UIPickerView *shotsPicker;
+@property (nonatomic, strong) UIPickerView *skillPicker;
+@property (nonatomic, strong) NSArray<NSString *> *skillOptions;
+@property (nonatomic, strong) NSArray<NSNumber *> *shotsOptions;
 
 @end
 
@@ -38,358 +41,299 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor systemBackgroundColor];
+    self.view.backgroundColor = APP_COLOR_BG;
     
-    //
-    // 1. Instructions Text View (will size in viewDidLayoutSubviews)
-    //
-    self.instructionsTextView = [[UITextView alloc] initWithFrame:CGRectZero];
-    self.instructionsTextView.textColor = [UIColor labelColor];
-    self.instructionsTextView.font = [UIFont systemFontOfSize:16];
-    self.instructionsTextView.editable = NO; // Read-only instructions
+    [[DataModel shared] setProcessingPaused:YES];
     
-    // Placeholder instructions text
-    self.instructionsTextView.text =
-    @"\nMini Game Instructions:\n\n"
-    @"1. Goal:\n"
-    @"   Hit your shot as close as possible to the target distance.\n"
-    @"2. Format:\n"
-    @"   - Incremental: The target distance starts at the minimum and increments each shot.\n"
-    @"   - Random: The distance is randomly chosen between the min and max.\n\n"
-    @"3. Scoring:\n"
-    @"   - Each shot can earn up to 100 points (100 = exact yardage).\n"
-    @"   - \"To Par\" for each shot:\n"
-    @"       • ≥ 90 points = Birdie (–1)\n"
-    @"       • ≥ 80 points = Par (+0)\n"
-    @"       • < 80 points = Bogey (+1)\n"
-    @"4. Shots:\n"
-    @"   The game ends after the number of shots you selected.\n\n"
-    @"5. Type:\n"
-    @"   Choose between Putting or Swings (full shots, chips, pitches, etc).\n"
-    @"   Putting uses total distance, Swings uses carry distance\n";
+    self.shotsOptions = @[@5, @10, @15, @20, @30, @50];
+    self.skillOptions = @[@"Tour", @"Scratch", @"5 HCP", @"10 HCP", @"15 HCP", @"20 HCP"];
+    
+    // Main Container
+    self.mainStack = [[UIStackView alloc] init];
+    self.mainStack.axis = UILayoutConstraintAxisHorizontal;
+    self.mainStack.distribution = UIStackViewDistributionFillEqually;
+    self.mainStack.spacing = 15;
+    self.mainStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.mainStack];
+    
+    UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.mainStack.topAnchor constraintEqualToAnchor:safe.topAnchor constant:10],
+        [self.mainStack.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:10],
+        [self.mainStack.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-10],
+        [self.mainStack.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-10]
+    ]];
+    
+    [self setupInstructions];
+    [self setupForm];
+    [self loadSettingsForCurrentSegment];
+    
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
+    [self.view addGestureRecognizer:tap];
+}
 
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [[DataModel shared] setProcessingPaused:NO];
+}
+
+// FIX: Helper Method to match Settings Screen styling
+- (void)styleSegmentedControl:(UISegmentedControl *)sc {
+    sc.backgroundColor = [UIColor colorWithWhite:0.3 alpha:1.0];
+    [sc setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor whiteColor]} forState:UIControlStateNormal];
+    [sc setTitleTextAttributes:@{NSForegroundColorAttributeName: APP_COLOR_BG} forState:UIControlStateSelected];
+}
+
+- (void)setupInstructions {
+    self.instructionsTextView = [[UITextView alloc] init];
+    self.instructionsTextView.editable = NO;
+    self.instructionsTextView.backgroundColor = [UIColor clearColor];
+    self.instructionsTextView.textColor = [UIColor whiteColor];
+    self.instructionsTextView.font = [UIFont systemFontOfSize:14]; // Compact font
+    [self.mainStack addArrangedSubview:self.instructionsTextView];
+    [self updateInstructionsText];
+}
+
+- (void)setupForm {
+    self.formStack = [[UIStackView alloc] init];
+    self.formStack.axis = UILayoutConstraintAxisVertical;
+    self.formStack.spacing = 8;
+    self.formStack.distribution = UIStackViewDistributionFill;
+    self.formStack.alignment = UIStackViewAlignmentFill;
     
-    [self.view addSubview:self.instructionsTextView];
+    UIScrollView *scrollView = [[UIScrollView alloc] init];
+    scrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    [scrollView addSubview:self.formStack];
+    self.formStack.translatesAutoresizingMaskIntoConstraints = NO;
     
-    //
-    // 2. Form View (non-scrollable)
-    //
-    self.formView = [[UIView alloc] initWithFrame:CGRectZero];
-    [self.view addSubview:self.formView];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.formStack.topAnchor constraintEqualToAnchor:scrollView.topAnchor],
+        [self.formStack.leadingAnchor constraintEqualToAnchor:scrollView.leadingAnchor],
+        [self.formStack.trailingAnchor constraintEqualToAnchor:scrollView.trailingAnchor],
+        [self.formStack.bottomAnchor constraintEqualToAnchor:scrollView.bottomAnchor],
+        [self.formStack.widthAnchor constraintEqualToAnchor:scrollView.widthAnchor]
+    ]];
+    [self.mainStack addArrangedSubview:scrollView];
     
-    // Optional: Dismiss keyboard by tapping in the form area
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self
-                                                                          action:@selector(dismissKeyboard)];
-    tap.cancelsTouchesInView = NO;
-    [self.formView addGestureRecognizer:tap];
+    // 1. Game Mode
+    [self addLabel:@"Game Mode:"];
+    self.typeSegment = [[UISegmentedControl alloc] initWithItems:@[@"Distance", @"Putting", @"Accuracy"]];
+    [self styleSegmentedControl:self.typeSegment]; // APPLY STYLE FIX
+    self.typeSegment.selectedSegmentIndex = 0;
+    [self.typeSegment addTarget:self action:@selector(typeChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.formStack addArrangedSubview:self.typeSegment];
     
-    //
-    // 3. Shots picker data
-    //
-    self.shotsOptions = @[@5, @10, @15, @20, @25, @30, @35, @40, @45, @50];
+    // 2. Skill Level
+    self.skillStack = [[UIStackView alloc] init];
+    self.skillStack.axis = UILayoutConstraintAxisVertical;
+    self.skillStack.spacing = 8;
+    self.skillStack.hidden = YES;
     
-    //
-    // 4. Build the controls (same frames, but added to formView)
-    //
-    CGFloat margin = 20;
-    CGFloat labelHeight = 20;
-    CGFloat controlHeight = 30;
-    CGFloat currentY = margin; // some top offset for the controls
+    self.skillLabel = [self createLabel:@"Skill Level:"];
+    [self.skillStack addArrangedSubview:self.skillLabel];
     
-    // --- TYPE ---
-    UILabel *typeLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, currentY, 100, labelHeight)];
-    typeLabel.text = @"Game type:";
-    [self.formView addSubview:typeLabel];
-    currentY += (labelHeight + 5);
+    self.skillField = [self createTextField];
+    self.skillField.text = @"10 HCP";
+    self.skillPicker = [[UIPickerView alloc] init];
+    self.skillPicker.delegate = self; self.skillPicker.dataSource = self;
+    self.skillField.inputView = self.skillPicker;
+    [self.skillStack addArrangedSubview:self.skillField];
     
-    self.typeSegment = [[UISegmentedControl alloc] initWithItems:@[@"Swings", @"Putting"]];
-    self.typeSegment.frame = CGRectMake(margin, currentY, 200, controlHeight);
-    self.typeSegment.selectedSegmentIndex = 0; // default to Swings
-    [self.formView addSubview:self.typeSegment];
-    currentY += (controlHeight + 20);
+    [self.formStack addArrangedSubview:self.skillStack];
     
-    // Add an action so that whenever “Swings”/“Putting” is tapped,
-    // we reload the appropriate settings from user defaults
-    [self.typeSegment addTarget:self
-                         action:@selector(typeSegmentValueChanged:)
-               forControlEvents:UIControlEventValueChanged];
-    
-    // --- MIN DISTANCE ---
-    UILabel *minLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, currentY, 250, labelHeight)];
-    minLabel.text = @"Distance: Min - Max";
-    [self.formView addSubview:minLabel];
-    currentY += (labelHeight + 5);
-    
-    self.minDistanceField = [[UITextField alloc] initWithFrame:CGRectMake(margin, currentY, 60, controlHeight)];
-    self.minDistanceField.text = @"20";
-    self.minDistanceField.borderStyle = UITextBorderStyleRoundedRect;
+    // 3. Distance Range
+    [self addLabel:@"Distance Range Yds (Min - Max):"];
+    UIStackView *distRow = [[UIStackView alloc] init];
+    distRow.axis = UILayoutConstraintAxisHorizontal;
+    distRow.spacing = 10;
+    distRow.distribution = UIStackViewDistributionFillEqually;
+    self.minDistanceField = [self createTextField];
     self.minDistanceField.keyboardType = UIKeyboardTypeNumberPad;
-    self.minDistanceField.delegate = self;
-    self.minDistanceField.inputAccessoryView = [self createAccessoryToolbar];
-    [self.formView addSubview:self.minDistanceField];
-    
-    self.maxDistanceField = [[UITextField alloc] initWithFrame:CGRectMake(margin + 100, currentY, 60, controlHeight)];
-    self.maxDistanceField.text = @"100";
-    self.maxDistanceField.borderStyle = UITextBorderStyleRoundedRect;
+    self.maxDistanceField = [self createTextField];
     self.maxDistanceField.keyboardType = UIKeyboardTypeNumberPad;
-    self.maxDistanceField.delegate = self;
-    self.maxDistanceField.inputAccessoryView = [self createAccessoryToolbar];
-    [self.formView addSubview:self.maxDistanceField];
-    currentY += (controlHeight + 20);
+    [distRow addArrangedSubview:self.minDistanceField];
+    [distRow addArrangedSubview:self.maxDistanceField];
+    [self.formStack addArrangedSubview:distRow];
     
-    // --- FORMAT ---
-    UILabel *formatLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, currentY, 120, labelHeight)];
-    formatLabel.text = @"Format:";
-    [self.formView addSubview:formatLabel];
-    currentY += (labelHeight + 5);
-    
+    // 4. Format
+    [self addLabel:@"Format:"];
     self.formatSegment = [[UISegmentedControl alloc] initWithItems:@[@"Incremental", @"Random"]];
-    self.formatSegment.frame = CGRectMake(margin, currentY, 200, controlHeight);
-    self.formatSegment.selectedSegmentIndex = 0; // default
-    [self.formView addSubview:self.formatSegment];
-    currentY += (controlHeight + 20);
+    [self styleSegmentedControl:self.formatSegment]; // APPLY STYLE FIX
+    [self.formStack addArrangedSubview:self.formatSegment];
     
-    // --- NUMBER OF SHOTS ---
-    UILabel *shotsLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, currentY, 200, labelHeight)];
-    shotsLabel.text = @"Number of shots:";
-    [self.formView addSubview:shotsLabel];
-    currentY += (labelHeight + 5);
-    
-    self.numShotsField = [[UITextField alloc] initWithFrame:CGRectMake(margin, currentY, 100, controlHeight)];
-    self.numShotsField.borderStyle = UITextBorderStyleRoundedRect;
-    [self.formView addSubview:self.numShotsField];
-    currentY += (controlHeight + 20);
-    
-    // Configure picker for numberOfShots field
+    // 5. Shots
+    [self addLabel:@"Number of Shots:"];
+    self.numShotsField = [self createTextField];
     self.shotsPicker = [[UIPickerView alloc] init];
-    self.shotsPicker.delegate = self;
-    self.shotsPicker.dataSource = self;
+    self.shotsPicker.delegate = self; self.shotsPicker.dataSource = self;
     self.numShotsField.inputView = self.shotsPicker;
-    self.numShotsField.inputAccessoryView = [self createAccessoryToolbar];
+    [self.formStack addArrangedSubview:self.numShotsField];
     
-    // Default number of shots to 10
-    NSUInteger defaultIndex = [self.shotsOptions indexOfObject:@10];
-    if (defaultIndex != NSNotFound) {
-        [self.shotsPicker selectRow:defaultIndex inComponent:0 animated:NO];
-        self.numShotsField.text = [NSString stringWithFormat:@"%@", self.shotsOptions[defaultIndex]];
-    }
+    // Spacer
+    UIView *spacer = [[UIView alloc] init];
+    [spacer.heightAnchor constraintEqualToConstant:10].active = YES;
+    [self.formStack addArrangedSubview:spacer];
     
-    // --- CANCEL / OK Buttons (styled like miniGameButton) ---
-    self.cancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.cancelButton setTitle:@"Cancel" forState:UIControlStateNormal];
-    self.cancelButton.frame = CGRectMake(margin, currentY, 120, 40);
+    // 6. Buttons
+    UIStackView *btnRow = [[UIStackView alloc] init];
+    btnRow.axis = UILayoutConstraintAxisHorizontal;
+    btnRow.spacing = 15;
+    btnRow.distribution = UIStackViewDistributionFillEqually;
+    self.cancelButton = [self createStyledButton:@"Cancel" action:@selector(cancelPressed)];
+    self.okButton = [self createStyledButton:@"Start Game" action:@selector(okPressed)];
+    [btnRow addArrangedSubview:self.cancelButton];
+    [btnRow addArrangedSubview:self.okButton];
+    [self.formStack addArrangedSubview:btnRow];
     
-    // Match miniGameButton style
-    [self.cancelButton setTitleColor:APP_COLOR_TEXT forState:UIControlStateNormal];
-    self.cancelButton.backgroundColor = APP_COLOR_ACCENT;
-    self.cancelButton.layer.cornerRadius = 4.0;
-    
-    [self.cancelButton addTarget:self action:@selector(cancelPressed:)
-                forControlEvents:UIControlEventTouchUpInside];
-    [self.formView addSubview:self.cancelButton];
-    
-    self.okButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.okButton setTitle:@"Start Game" forState:UIControlStateNormal];
-    self.okButton.frame = CGRectMake(CGRectGetMaxX(self.cancelButton.frame) + 30, currentY, 120, 40);
-    
-    // Match miniGameButton style
-    [self.okButton setTitleColor:APP_COLOR_TEXT forState:UIControlStateNormal];
-    self.okButton.backgroundColor = APP_COLOR_ACCENT;
-    self.okButton.layer.cornerRadius = 4.0;
-    
-    [self.okButton addTarget:self action:@selector(okPressed:)
-            forControlEvents:UIControlEventTouchUpInside];
-    [self.formView addSubview:self.okButton];
-    currentY += (40 + 20);
-    
-    // Load the settings for the initial segment (Swings if selectedSegmentIndex == 0).
+    UIView *fill = [[UIView alloc] init];
+    [self.formStack addArrangedSubview:fill];
+}
+
+// --- Dynamic Updates ---
+
+- (void)typeChanged:(id)sender {
     [self loadSettingsForCurrentSegment];
+    [self updateSkillVisibility];
+    [self updateInstructionsText];
 }
 
-#pragma mark - Layout with Safe Area
-
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    
-    // Safely lay out subviews so they're not cut off by notches / corners
-    UIEdgeInsets safeArea = self.view.safeAreaInsets;
-    
-    CGFloat totalWidth  = self.view.bounds.size.width  - (safeArea.left + safeArea.right);
-    CGFloat totalHeight = self.view.bounds.size.height - (safeArea.top + safeArea.bottom);
-    CGFloat halfWidth   = totalWidth * 0.5;
-    
-    // Left half for instructions
-    self.instructionsTextView.frame = CGRectMake(
-        safeArea.left,
-        safeArea.top,
-        halfWidth,
-        totalHeight
-    );
-    
-    // Right half for form
-    self.formView.frame = CGRectMake(
-        safeArea.left + halfWidth,
-        safeArea.top,
-        halfWidth,
-        totalHeight
-    );
+- (void)updateSkillVisibility {
+    BOOL isAccuracy = (self.typeSegment.selectedSegmentIndex == 2);
+    [UIView animateWithDuration:0.25 animations:^{
+        self.skillStack.hidden = !isAccuracy;
+        self.skillStack.alpha = isAccuracy ? 1.0 : 0.0;
+        [self.view layoutIfNeeded];
+    }];
 }
 
-#pragma mark - Type Segment Handling
-
-- (void)typeSegmentValueChanged:(UISegmentedControl *)sender {
-    [self loadSettingsForCurrentSegment];
-}
-
-// Load either "Swings" or "Putting" settings from user defaults and populate fields.
-- (void)loadSettingsForCurrentSegment {
-    // If index=0 => "Swings", else => "Putting"
-    NSString *type = (self.typeSegment.selectedSegmentIndex == 0) ? @"Swings" : @"Putting";
+- (void)updateInstructionsText {
+    NSString *mode = [self.typeSegment titleForSegmentAtIndex:self.typeSegment.selectedSegmentIndex];
+    NSMutableString *text = [NSMutableString string];
     
-    NSDictionary *saved = [MiniGameSettingsStore loadSettingsForType:type];
-    if (saved.count > 0) {
-        // We have stored settings
-        NSInteger minDist = [saved[@"minDistance"] integerValue];
-        NSInteger maxDist = [saved[@"maxDistance"] integerValue];
-        NSString *format  = saved[@"format"];
-        NSInteger shots   = [saved[@"numShots"] integerValue];
-        
-        self.minDistanceField.text = [NSString stringWithFormat:@"%ld", (long)minDist];
-        self.maxDistanceField.text = [NSString stringWithFormat:@"%ld", (long)maxDist];
-        
-        if ([format isEqualToString:@"Incremental"]) {
-            self.formatSegment.selectedSegmentIndex = 0;
-        } else {
-            self.formatSegment.selectedSegmentIndex = 1;
-        }
-        
-        self.numShotsField.text = [NSString stringWithFormat:@"%ld", (long)shots];
-        NSUInteger index = [self.shotsOptions indexOfObject:@(shots)];
-        if (index != NSNotFound) {
-            [self.shotsPicker selectRow:index inComponent:0 animated:NO];
-        }
+    [text appendString:@"MINI GAME RULES\n\n"];
+    
+    if ([mode isEqualToString:@"Accuracy"]) {
+        [text appendFormat:@"MODE: %@\n", mode];
+        [text appendString:@"Hit target distance & direction.\n\n"];
+        [text appendString:@"SCORING\nScore based on dispersion vs skill level.\n\n"];
+        [text appendString:@"SKILL LEVELS (Dispersion Radius @ 150y)\n"];
+        [text appendString:@"• Tour (4%): 6y\n• Scratch (6%): 9y\n• 5 HCP (8%): 12y\n"];
+        [text appendString:@"• 10 HCP (10%): 15y\n• 15 HCP (12%): 18y\n• 20 HCP (15%): 22.5y"];
     } else {
-        // Nothing saved for this type; use your defaults
-        if ([type isEqualToString:@"Swings"]) {
-            self.minDistanceField.text = @"20";
-            self.maxDistanceField.text = @"100";
-            self.formatSegment.selectedSegmentIndex = 0;
-            self.numShotsField.text = @"10";
-            NSUInteger defaultIndex = [self.shotsOptions indexOfObject:@10];
-            if (defaultIndex != NSNotFound) {
-                [self.shotsPicker selectRow:defaultIndex inComponent:0 animated:NO];
-            }
+        [text appendFormat:@"MODE: %@\n", mode];
+        if ([mode isEqualToString:@"Putting"]) {
+            [text appendString:@"Hit specific Total Putt Distance targets.\n\n"];
         } else {
-            // For Putting, possibly different defaults
-            self.minDistanceField.text = @"5";
-            self.maxDistanceField.text = @"50";
-            self.formatSegment.selectedSegmentIndex = 0;
-            self.numShotsField.text = @"10";
-            NSUInteger defaultIndex = [self.shotsOptions indexOfObject:@10];
-            if (defaultIndex != NSNotFound) {
-                [self.shotsPicker selectRow:defaultIndex inComponent:0 animated:NO];
-            }
+            [text appendString:@"Hit specific Carry Distance targets.\n\n"];
         }
+        
+        [text appendString:@"SCORING\n"];
+        [text appendString:@"• Birdie: Inside 5% of target\n"];
+        [text appendString:@"• Par: Inside 10% of target\n"];
+        [text appendString:@"• Bogey: Outside 10% of target\n"];
     }
-}
-
-#pragma mark - UIPickerViewDataSource / UIPickerViewDelegate
-
-- (NSInteger)numberOfComponentsInPickerView:(UIPickerView *)pickerView {
-    return 1; // single column
-}
-
-- (NSInteger)pickerView:(UIPickerView *)pickerView numberOfRowsInComponent:(NSInteger)component {
-    return self.shotsOptions.count;
-}
-
-- (NSString *)pickerView:(UIPickerView *)pickerView
-             titleForRow:(NSInteger)row
-            forComponent:(NSInteger)component {
-    return [NSString stringWithFormat:@"%@", self.shotsOptions[row]];
-}
-
-- (void)pickerView:(UIPickerView *)pickerView didSelectRow:(NSInteger)row
-       inComponent:(NSInteger)component {
-    self.numShotsField.text = [NSString stringWithFormat:@"%@", self.shotsOptions[row]];
-}
-
-#pragma mark - Keyboard Handling
-
-- (void)dismissKeyboard {
-    [self.view endEditing:YES];
-}
-
-#pragma mark - Create Toolbar ("Done" Button)
-
-- (UIToolbar *)createAccessoryToolbar {
-    UIToolbar *toolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0,
-                                                                     self.view.frame.size.width,
-                                                                     44)];
-    UIBarButtonItem *flexSpace = [[UIBarButtonItem alloc]
-                                  initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
-                                  target:nil
-                                  action:nil];
-    UIBarButtonItem *doneButton = [[UIBarButtonItem alloc]
-                                   initWithBarButtonSystemItem:UIBarButtonSystemItemDone
-                                   target:self
-                                   action:@selector(doneButtonTapped:)];
-    [toolbar setItems:@[flexSpace, doneButton]];
-    return toolbar;
-}
-
-- (void)doneButtonTapped:(id)sender {
-    [self.view endEditing:YES]; // Hide the keyboard/picker
-}
-
-#pragma mark - Button Actions
-
-- (void)cancelPressed:(id)sender {
-    [self dismissViewControllerAnimated:YES completion:nil];
-}
-
-- (void)okPressed:(id)sender {
-    // Figure out which type is selected
-    NSString *type = (self.typeSegment.selectedSegmentIndex == 0) ? @"Swings" : @"Putting";
     
-    // Gather user’s inputs
-    NSString *minDistString = self.minDistanceField.text ?: @"5";
-    NSString *maxDistString = self.maxDistanceField.text ?: @"50";
-    NSString *format = (self.formatSegment.selectedSegmentIndex == 0) ? @"Incremental" : @"Random";
-    NSString *shotsString = self.numShotsField.text ?: @"10";
+    self.instructionsTextView.text = text;
+}
+
+- (void)loadSettingsForCurrentSegment {
+    NSString *type = [self.typeSegment titleForSegmentAtIndex:self.typeSegment.selectedSegmentIndex];
+    NSDictionary *saved = [MiniGameSettingsStore loadSettingsForType:type];
     
-    NSInteger minDist = [minDistString integerValue];
-    NSInteger maxDist = [maxDistString integerValue];
-    NSInteger shots   = [shotsString integerValue];
+    if (saved.count > 0) {
+        self.minDistanceField.text = [NSString stringWithFormat:@"%@", saved[@"minDistance"]];
+        self.maxDistanceField.text = [NSString stringWithFormat:@"%@", saved[@"maxDistance"]];
+        self.formatSegment.selectedSegmentIndex = [saved[@"format"] isEqualToString:@"Incremental"] ? 0 : 1;
+        self.numShotsField.text = [NSString stringWithFormat:@"%@", saved[@"numShots"]];
+    } else {
+        if ([type isEqualToString:@"Accuracy"]) {
+            self.minDistanceField.text = @"100"; self.maxDistanceField.text = @"200";
+        } else if ([type isEqualToString:@"Putting"]) {
+            self.minDistanceField.text = @"5"; self.maxDistanceField.text = @"30";
+        } else {
+            self.minDistanceField.text = @"20"; self.maxDistanceField.text = @"100";
+        }
+        self.numShotsField.text = @"10";
+    }
+    [self updateSkillVisibility];
+    [self updateInstructionsText];
+}
+
+- (void)okPressed {
+    NSString *type = [self.typeSegment titleForSegmentAtIndex:self.typeSegment.selectedSegmentIndex];
+    NSInteger min = [self.minDistanceField.text integerValue];
+    NSInteger max = [self.maxDistanceField.text integerValue];
+    NSString *fmt = (self.formatSegment.selectedSegmentIndex == 0) ? @"Incremental" : @"Random";
+    NSInteger shots = [self.numShotsField.text integerValue];
+    NSString *skill = self.skillField.text;
     
-    // Save to user defaults, so next time we load this type, we get these values
-    [MiniGameSettingsStore saveSettingsForType:type
-                                        format:format
-                                   minDistance:minDist
-                                   maxDistance:maxDist
-                                     numShots:shots];
+    [MiniGameSettingsStore saveSettingsForType:type format:fmt minDistance:min maxDistance:max numShots:shots];
     
-    // Then fire your notification or do whatever you did before
-    NSDictionary *userInfo = @{
-        @"gameType"   : type,
-        @"minDistance": @(minDist),
-        @"maxDistance": @(maxDist),
-        @"format"     : format,
+    NSDictionary *info = @{
+        @"gameType": type,
+        @"minDistance": @(min),
+        @"maxDistance": @(max),
+        @"format": fmt,
         @"numberOfShots": @(shots),
+        @"skillLevel": skill
     };
-    
-    [[NSNotificationCenter defaultCenter] postNotificationName:MiniGameStartNotification
-                                                        object:nil
-                                                      userInfo:userInfo];
-    
-    // Dismiss
+    [[NSNotificationCenter defaultCenter] postNotificationName:MiniGameStartNotification object:nil userInfo:info];
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
-#pragma mark - Cleanup
+- (void)cancelPressed { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (void)dismissKeyboard { [self.view endEditing:YES]; }
 
-- (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
+// --- UI HELPERS ---
+- (void)addLabel:(NSString *)text { [self.formStack addArrangedSubview:[self createLabel:text]]; }
+
+- (UILabel *)createLabel:(NSString *)text {
+    UILabel *l = [[UILabel alloc] init];
+    l.text = text;
+    l.textColor = APP_COLOR_ACCENT;
+    l.font = [UIFont boldSystemFontOfSize:13]; // Slightly smaller label
+    return l;
+}
+
+- (UITextField *)createTextField {
+    UITextField *t = [[UITextField alloc] init];
+    t.borderStyle = UITextBorderStyleRoundedRect;
+    t.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1];
+    t.textColor = [UIColor whiteColor];
+    [t.heightAnchor constraintEqualToConstant:32].active = YES; // Compact height
+    
+    UIToolbar *tb = [[UIToolbar alloc] initWithFrame:CGRectMake(0,0,300,44)];
+    UIBarButtonItem *d = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(dismissKeyboard)];
+    tb.items = @[[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil], d];
+    t.inputAccessoryView = tb;
+    return t;
+}
+
+- (UIButton *)createStyledButton:(NSString *)title action:(SEL)sel {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+    [b setTitle:title forState:UIControlStateNormal];
+    [b setTitleColor:APP_COLOR_ACCENT forState:UIControlStateNormal];
+    [b setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
+    b.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1];
+    b.layer.cornerRadius = 8;
+    b.layer.borderWidth = 1;
+    b.layer.borderColor = APP_COLOR_ACCENT.CGColor;
+    [b.heightAnchor constraintEqualToConstant:40].active = YES;
+    [b addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
+
+// Pickers
+- (NSInteger)numberOfComponentsInPickerView:(UIPickerView *)pickerView { return 1; }
+- (NSInteger)pickerView:(UIPickerView *)pickerView numberOfRowsInComponent:(NSInteger)component {
+    return (pickerView == self.skillPicker) ? self.skillOptions.count : self.shotsOptions.count;
+}
+- (NSString *)pickerView:(UIPickerView *)pickerView titleForRow:(NSInteger)row forComponent:(NSInteger)component {
+    return (pickerView == self.skillPicker) ? self.skillOptions[row] : [NSString stringWithFormat:@"%@", self.shotsOptions[row]];
+}
+- (void)pickerView:(UIPickerView *)pickerView didSelectRow:(NSInteger)row inComponent:(NSInteger)component {
+    if (pickerView == self.skillPicker) self.skillField.text = self.skillOptions[row];
+    else self.numShotsField.text = [NSString stringWithFormat:@"%@", self.shotsOptions[row]];
 }
 
 @end

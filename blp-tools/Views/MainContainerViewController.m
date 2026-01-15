@@ -3,6 +3,7 @@
 #import "ImagesViewController.h"
 #import "DebugViewController.h"
 #import "SettingsViewController.h"
+#import "MiniGameSettingsViewController.h"
 #import "Theme.h"
 
 @interface MainContainerViewController ()
@@ -11,6 +12,7 @@
 
 @property (nonatomic, strong) NSArray<UIButton *> *tabButtons;
 @property (nonatomic, strong) UIButton *dataButton;
+@property (nonatomic, strong) UIButton *gamesButton;
 @property (nonatomic, strong) UIButton *imagesButton;
 @property (nonatomic, strong) UIButton *debugButton;
 @property (nonatomic, strong) UIButton *settingsButton;
@@ -24,8 +26,7 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = APP_COLOR_BG;
-    
-    self.selectedTabIndex = -1; // none selected initially
+    self.selectedTabIndex = -1;
     
     [self setupSideTabBar];
     [self setupContentContainer];
@@ -43,23 +44,23 @@
     
     // Create tab buttons
     self.dataButton = [self createTabButtonWithTitle:@"Data" action:@selector(tabButtonTapped:)];
+    self.gamesButton = [self createTabButtonWithTitle:@"Games" action:@selector(gamesButtonTapped)];
     self.imagesButton = [self createTabButtonWithTitle:@"Screens" action:@selector(tabButtonTapped:)];
     self.debugButton = [self createTabButtonWithTitle:@"Camera" action:@selector(tabButtonTapped:)];
     self.settingsButton = [self createTabButtonWithTitle:@"Settings" action:@selector(tabButtonTapped:)];
     
+    // Tags for view switching (Games doesn't use one)
     self.dataButton.tag = 0;
     self.imagesButton.tag = 1;
     self.debugButton.tag = 2;
     self.settingsButton.tag = 3;
     
-    // Store them in an array so we can easily loop over them
-    self.tabButtons = @[self.dataButton, self.imagesButton, self.debugButton, self.settingsButton];
+    // ORDER: Data, Games, Screens, Camera, Settings
+    self.tabButtons = @[self.dataButton, self.gamesButton, self.imagesButton, self.debugButton, self.settingsButton];
     
-    // Space them out more in a vertical stack
     UIStackView *stackView = [[UIStackView alloc] initWithArrangedSubviews:self.tabButtons];
     stackView.axis = UILayoutConstraintAxisVertical;
     stackView.alignment = UIStackViewAlignmentCenter;
-    // Increase spacing for a more generous layout
     stackView.spacing = 40;
     stackView.translatesAutoresizingMaskIntoConstraints = NO;
     [self.sideTabBar addSubview:stackView];
@@ -72,7 +73,6 @@
 
 - (UIButton *)createTabButtonWithTitle:(NSString *)title action:(SEL)action {
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-    // Default is white text
     [btn setTitleColor:APP_COLOR_TEXT forState:UIControlStateNormal];
     btn.backgroundColor = [UIColor clearColor];
     [btn setTitle:title forState:UIControlStateNormal];
@@ -104,15 +104,25 @@
     [self switchToChildViewController:newVC tabIndex:tabIndex];
 }
 
+- (void)gamesButtonTapped {
+    // 1. Present the Modal
+    MiniGameSettingsViewController *vc = [[MiniGameSettingsViewController alloc] init];
+    vc.modalPresentationStyle = UIModalPresentationFormSheet;
+    [self presentViewController:vc animated:YES completion:nil];
+    
+    // 2. Switch background to Data View if not already there
+    if (self.selectedTabIndex != 0) {
+        [self switchToChildViewController:[LaunchMonitorDataViewController new] tabIndex:0];
+    }
+}
+
 - (void)switchToChildViewController:(UIViewController *)newVC tabIndex:(NSInteger)tabIndex {
-    // Remove old child
     if (self.currentChildVC) {
         [self.currentChildVC willMoveToParentViewController:nil];
         [self.currentChildVC.view removeFromSuperview];
         [self.currentChildVC removeFromParentViewController];
     }
     
-    // Add new child
     self.currentChildVC = newVC;
     [self addChildViewController:newVC];
     newVC.view.frame = self.contentContainer.bounds;
@@ -120,15 +130,14 @@
     [self.contentContainer addSubview:newVC.view];
     [newVC didMoveToParentViewController:self];
     
-    // Update tab highlight
     self.selectedTabIndex = tabIndex;
     [self updateTabColors];
 }
 
 - (void)updateTabColors {
-    // For each tab button, if its tag == selectedTabIndex => accent color, else white
     for (UIButton *btn in self.tabButtons) {
-        if (btn.tag == self.selectedTabIndex) {
+        // Standard Tab Selection Logic
+        if (btn.tag == self.selectedTabIndex && btn != self.gamesButton) {
             [btn setTitleColor:APP_COLOR_ACCENT forState:UIControlStateNormal];
         } else {
             [btn setTitleColor:APP_COLOR_TEXT forState:UIControlStateNormal];

@@ -1,30 +1,29 @@
-//
-//  SettingsViewController.m
-//  YourAppName
-//
-//  Created by Your Name on Date.
-//
-
 #import "SettingsViewController.h"
 #import "Theme.h"
 #import "SettingsManager.h"
 #import "GSProConnector.h"
+#import "OGSConnector.h"
 #import "DataModel.h"
 
 @interface SettingsViewController () <UIPickerViewDataSource, UIPickerViewDelegate, UITextFieldDelegate>
+
+// UI Elements
+@property (nonatomic, strong) UIScrollView *scrollView;
+@property (nonatomic, strong) UIStackView *mainStackView;
 
 @property (nonatomic, strong) UIPickerView *stimpPicker;
 @property (nonatomic, strong) NSArray<NSNumber *> *stimpValues;
 @property (nonatomic, assign) NSInteger selectedStimpIndex;
 
-// New: A rounded text field for stimp (instead of placing the picker directly)
 @property (nonatomic, strong) UITextField *stimpField;
-
 @property (nonatomic, strong) UISegmentedControl *fairwayControl;
 @property (nonatomic, strong) UITextField *ipField;
-@property (nonatomic, strong) UILabel *connectionStateLabel;
 
-@property (nonatomic, assign) CGRect originalFrame;
+@property (nonatomic, strong) UISegmentedControl *targetControl;
+@property (nonatomic, strong) UISlider *fpsSlider;
+@property (nonatomic, strong) UILabel *fpsValueLabel;
+@property (nonatomic, strong) UIButton *testButton;
+@property (nonatomic, strong) UIView *statusLight;
 
 @end
 
@@ -34,287 +33,392 @@
     [super viewDidLoad];
     self.view.backgroundColor = APP_COLOR_BG;
     
-    self.originalFrame = self.view.frame;
-    
-    // Build stimpValues: values from 5 to 15.
+    // --- 1. SETUP DATA ---
     NSMutableArray<NSNumber *> *values = [NSMutableArray array];
-    for (NSInteger i = 5; i <= 15; i++) {
-        [values addObject:@(i)];
-    }
+    for (NSInteger i = 5; i <= 15; i++) { [values addObject:@(i)]; }
     self.stimpValues = [values copy];
+    self.selectedStimpIndex = 5;
+
+    // --- 2. LAYOUT SCAFFOLDING ---
+    [self setupLayoutScaffolding];
     
-    // Temporarily set selectedStimpIndex; the real value is loaded in viewWillAppear.
-    self.selectedStimpIndex = 5; // default (e.g. stimp=10)
+    // --- 3. BUILD ROWS ---
+    BOOL isPad = [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad;
+    CGFloat fontSize = isPad ? 22.0 : 16.0;
     
-    CGFloat margin = 20;
-    CGFloat labelWidth = 140;
-    CGFloat fieldHeight = 30;
-    CGFloat x = margin, y = margin + 20;
-    
-    // 5) Fairway speed
-    UILabel *fairwayLabel = [[UILabel alloc] initWithFrame:CGRectMake(x, y, labelWidth, fieldHeight)];
-    fairwayLabel.text = @"Fairway speed:";
-    fairwayLabel.textColor = APP_COLOR_TEXT;
-    [self.view addSubview:fairwayLabel];
-    
+    // A. Fairway Row
+    UILabel *fairwayLabel = [self createLabel:@"Fairway Speed:" size:fontSize];
     self.fairwayControl = [[UISegmentedControl alloc] initWithItems:@[@"slow", @"medium", @"fast", @"links"]];
-    self.fairwayControl.frame = CGRectMake(x + labelWidth + 10, y, 360, fieldHeight);
+    [self styleSegmentedControl:self.fairwayControl];
+    // REMOVED SCALE TRANSFORM to fix alignment issues
     self.fairwayControl.selectedSegmentIndex = 1;
     [self.fairwayControl addTarget:self action:@selector(fairwayControlChanged:) forControlEvents:UIControlEventValueChanged];
-    [self.view addSubview:self.fairwayControl];
-    y += fieldHeight + 20;
+    [self addRowWithLabel:fairwayLabel control:self.fairwayControl];
+
+    // B. Stimp Row
+    [self setupStimpInput];
+    UILabel *stimpLabel = [self createLabel:@"Putting Stimp:" size:fontSize];
+    [self addRowWithLabel:stimpLabel control:self.stimpField];
     
-    // 1) Putting stimp label
-    UILabel *stimpLabel = [[UILabel alloc] initWithFrame:CGRectMake(x, y, labelWidth, fieldHeight)];
-    stimpLabel.text = @"Putting stimp:";
-    stimpLabel.textColor = APP_COLOR_TEXT;
-    [self.view addSubview:stimpLabel];
+    // C. Target Row
+    [self addTargetRowWithFontSize:fontSize];
     
-    // 2) Create a UITextField for stimp (rounded style)
-    self.stimpField = [[UITextField alloc] initWithFrame:CGRectMake(x + labelWidth + 10, y, 100, fieldHeight)];
-    self.stimpField.borderStyle = UITextBorderStyleRoundedRect;
+    // D. IP Row
+    [self setupIPInput];
+    UILabel *ipLabel = [self createLabel:@"Simulator IP:" size:fontSize];
+    [self addRowWithLabel:ipLabel control:self.ipField];
+    
+    // E. FPS Row
+    [self addFPSRowWithFontSize:fontSize];
+    
+    // F. Footer Area
+    [self addFooterWithFontSize:fontSize];
+
+    // --- 4. OBSERVERS ---
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
+    
+    // Start Status Timer
+    [NSTimer scheduledTimerWithTimeInterval:2.0 target:self selector:@selector(refreshStatusLight) userInfo:nil repeats:YES];
+    [self refreshStatusLight];
+}
+
+// --- STYLING HELPERS ---
+
+- (void)styleTextField:(UITextField *)tf {
+    tf.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1.0];
+    tf.textColor = [UIColor whiteColor];
+    tf.borderStyle = UITextBorderStyleRoundedRect;
+    tf.layer.cornerRadius = 6.0;
+    tf.layer.masksToBounds = YES;
+}
+
+- (void)styleButton:(UIButton *)btn {
+    [btn setTitleColor:APP_COLOR_ACCENT forState:UIControlStateNormal];
+    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
+    btn.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1.0];
+    btn.layer.cornerRadius = 8.0;
+    btn.layer.borderWidth = 1.0;
+    btn.layer.borderColor = APP_COLOR_ACCENT.CGColor;
+}
+
+- (void)styleSegmentedControl:(UISegmentedControl *)sc {
+    sc.backgroundColor = [UIColor colorWithWhite:0.3 alpha:1.0];
+    [sc setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor whiteColor]} forState:UIControlStateNormal];
+    [sc setTitleTextAttributes:@{NSForegroundColorAttributeName: APP_COLOR_BG} forState:UIControlStateSelected];
+}
+
+// --- LAYOUT ---
+
+- (void)setupLayoutScaffolding {
+    self.scrollView = [[UIScrollView alloc] init];
+    self.scrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.scrollView];
+    
+    self.mainStackView = [[UIStackView alloc] init];
+    self.mainStackView.axis = UILayoutConstraintAxisVertical;
+    self.mainStackView.alignment = UIStackViewAlignmentFill;
+    self.mainStackView.distribution = UIStackViewDistributionFill;
+    
+    BOOL isPad = [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad;
+    self.mainStackView.spacing = isPad ? 50.0 : 25.0;
+    
+    self.mainStackView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.scrollView addSubview:self.mainStackView];
+    
+    UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
+    CGFloat width = isPad ? 700 : 500;
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.scrollView.topAnchor constraintEqualToAnchor:safe.topAnchor],
+        [self.scrollView.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
+        [self.scrollView.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
+        [self.scrollView.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
+        
+        [self.mainStackView.topAnchor constraintEqualToAnchor:self.scrollView.contentLayoutGuide.topAnchor constant:40],
+        [self.mainStackView.bottomAnchor constraintEqualToAnchor:self.scrollView.contentLayoutGuide.bottomAnchor constant:-40],
+        [self.mainStackView.centerXAnchor constraintEqualToAnchor:self.scrollView.frameLayoutGuide.centerXAnchor],
+        [self.mainStackView.widthAnchor constraintEqualToConstant:width]
+    ]];
+    
+    if (!isPad) {
+        NSLayoutConstraint *widthConstraint = [self.mainStackView.widthAnchor constraintEqualToAnchor:self.view.widthAnchor constant:-40];
+        widthConstraint.priority = UILayoutPriorityDefaultHigh;
+        widthConstraint.active = YES;
+    }
+}
+
+- (void)addRowWithLabel:(UIView *)leftView control:(UIView *)rightView {
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[leftView, rightView]];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.distribution = UIStackViewDistributionFill;
+    row.spacing = 20;
+    
+    [leftView.widthAnchor constraintEqualToAnchor:row.widthAnchor multiplier:0.35].active = YES;
+    [self.mainStackView addArrangedSubview:row];
+}
+
+- (void)addTargetRowWithFontSize:(CGFloat)fontSize {
+    UILabel *label = [self createLabel:@"Target Sim:" size:fontSize];
+    
+    self.targetControl = [[UISegmentedControl alloc] initWithItems:@[@"OpenGolf", @"GSPro"]];
+    [self styleSegmentedControl:self.targetControl];
+    // REMOVED SCALE TRANSFORM to fix overlap
+    
+    BOOL useOGS = [[NSUserDefaults standardUserDefaults] boolForKey:@"use_ogs"];
+    self.targetControl.selectedSegmentIndex = useOGS ? 0 : 1;
+    [self.targetControl addTarget:self action:@selector(targetControlChanged:) forControlEvents:UIControlEventValueChanged];
+    
+    self.statusLight = [[UIView alloc] init];
+    self.statusLight.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.statusLight.widthAnchor constraintEqualToConstant:16].active = YES;
+    [self.statusLight.heightAnchor constraintEqualToConstant:16].active = YES;
+    self.statusLight.layer.cornerRadius = 8;
+    self.statusLight.backgroundColor = [UIColor grayColor];
+    self.statusLight.layer.borderWidth = 1.0;
+    self.statusLight.layer.borderColor = [UIColor whiteColor].CGColor;
+    
+    self.testButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.testButton setTitle:@"Test" forState:UIControlStateNormal];
+    [self styleButton:self.testButton];
+    
+    [self.testButton.widthAnchor constraintEqualToConstant:80].active = YES;
+    [self.testButton addTarget:self action:@selector(testConnectionPressed) forControlEvents:UIControlEventTouchUpInside];
+    
+    UIStackView *rightStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.targetControl, self.statusLight, self.testButton]];
+    rightStack.axis = UILayoutConstraintAxisHorizontal;
+    rightStack.alignment = UIStackViewAlignmentCenter;
+    rightStack.spacing = 20; // Ensure enough space between selector and light
+    
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, rightStack]];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.distribution = UIStackViewDistributionFill;
+    row.spacing = 20;
+    
+    [self.mainStackView addArrangedSubview:row];
+    [label.widthAnchor constraintEqualToAnchor:row.widthAnchor multiplier:0.35].active = YES;
+}
+
+- (void)addFPSRowWithFontSize:(CGFloat)fontSize {
+    UILabel *label = [self createLabel:@"Camera Capture Speed:" size:fontSize];
+    
+    self.fpsSlider = [[UISlider alloc] init];
+    self.fpsSlider.minimumValue = 2.0;
+    self.fpsSlider.maximumValue = 20.0;
+    [self.fpsSlider addTarget:self action:@selector(fpsSliderChanged:) forControlEvents:UIControlEventValueChanged];
+    
+    self.fpsValueLabel = [self createLabel:@"- fps" size:fontSize];
+    self.fpsValueLabel.textAlignment = NSTextAlignmentRight;
+    [self.fpsValueLabel.widthAnchor constraintEqualToConstant:80].active = YES;
+    
+    UIStackView *rightStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.fpsSlider, self.fpsValueLabel]];
+    rightStack.axis = UILayoutConstraintAxisHorizontal;
+    rightStack.spacing = 10;
+    
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, rightStack]];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.distribution = UIStackViewDistributionFill;
+    row.spacing = 20;
+    
+    [self.mainStackView addArrangedSubview:row];
+    [label.widthAnchor constraintEqualToAnchor:row.widthAnchor multiplier:0.35].active = YES;
+}
+
+- (void)addFooterWithFontSize:(CGFloat)fontSize {
+    UIStackView *footerStack = [[UIStackView alloc] init];
+    footerStack.axis = UILayoutConstraintAxisVertical;
+    footerStack.alignment = UIStackViewAlignmentCenter;
+    footerStack.spacing = 10;
+    
+    UIButton *supportButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [supportButton setTitle:@"Questions & Support" forState:UIControlStateNormal];
+    [supportButton setTitleColor:APP_COLOR_ACCENT forState:UIControlStateNormal];
+    supportButton.titleLabel.font = [UIFont systemFontOfSize:fontSize];
+    [supportButton addTarget:self action:@selector(supportButtonPressed) forControlEvents:UIControlEventTouchUpInside];
+    [footerStack addArrangedSubview:supportButton];
+    
+    UILabel *footerLabel = [self createLabel:@"© 2025 Heapsheeps LLC" size:fontSize - 4];
+    footerLabel.textColor = APP_COLOR_DARK_TEXT;
+    footerLabel.textAlignment = NSTextAlignmentCenter;
+    [footerStack addArrangedSubview:footerLabel];
+    
+    [self.mainStackView addArrangedSubview:footerStack];
+}
+
+- (UILabel *)createLabel:(NSString *)text size:(CGFloat)size {
+    UILabel *l = [[UILabel alloc] init];
+    l.text = text;
+    l.textColor = APP_COLOR_TEXT;
+    l.font = [UIFont systemFontOfSize:size];
+    return l;
+}
+
+- (void)setupStimpInput {
+    self.stimpField = [[UITextField alloc] init];
+    [self styleTextField:self.stimpField];
     self.stimpField.textAlignment = NSTextAlignmentCenter;
-    [self.view addSubview:self.stimpField];
     
-    // 3) Create the UIPickerView for stimp
     self.stimpPicker = [[UIPickerView alloc] init];
-    self.stimpPicker.backgroundColor = [UIColor clearColor]; // clear or matching color
     self.stimpPicker.dataSource = self;
     self.stimpPicker.delegate = self;
-    // Set the stimpField to use the picker as its inputView
     self.stimpField.inputView = self.stimpPicker;
     
-    // 4) Add an accessory toolbar with a Done button for stimpField
-    UIToolbar *stimpToolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
-    stimpToolbar.barStyle = UIBarStyleBlack;
-    UIBarButtonItem *flexSpace = [[UIBarButtonItem alloc]
-                                  initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
-                                  target:nil
-                                  action:nil];
-    UIBarButtonItem *doneButton = [[UIBarButtonItem alloc]
-                                   initWithTitle:@"Done"
-                                   style:UIBarButtonItemStyleDone
-                                   target:self
-                                   action:@selector(dismissKeyboard)];
-    stimpToolbar.items = @[flexSpace, doneButton];
-    [stimpToolbar sizeToFit];
-    self.stimpField.inputAccessoryView = stimpToolbar;
-    y += fieldHeight + 20;
-    
-    // 6) GSPro IP label
-    UILabel *ipLabel = [[UILabel alloc] initWithFrame:CGRectMake(x, y, labelWidth, fieldHeight)];
-    ipLabel.text = @"GSPro IP:";
-    ipLabel.textColor = APP_COLOR_TEXT;
-    [self.view addSubview:ipLabel];
-    
-    // 7) IP text field
-    self.ipField = [[UITextField alloc] initWithFrame:CGRectMake(x + labelWidth + 10, y, 160, fieldHeight)];
-    self.ipField.borderStyle = UITextBorderStyleRoundedRect;
+    UIToolbar *t = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 0, 44)];
+    UIBarButtonItem *done = [[UIBarButtonItem alloc] initWithTitle:@"Done" style:UIBarButtonItemStyleDone target:self action:@selector(dismissKeyboard)];
+    t.items = @[[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil], done];
+    self.stimpField.inputAccessoryView = t;
+}
+
+- (void)setupIPInput {
+    self.ipField = [[UITextField alloc] init];
+    [self styleTextField:self.ipField];
     self.ipField.placeholder = @"192.168.x.x";
     self.ipField.keyboardType = UIKeyboardTypeDecimalPad;
     self.ipField.delegate = self;
     
-    // Add accessory toolbar for IP field
-    UIToolbar *ipToolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
-    ipToolbar.barStyle = UIBarStyleBlack;
-    UIBarButtonItem *ipFlex = [[UIBarButtonItem alloc]
-                               initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
-                               target:nil
-                               action:nil];
-    UIBarButtonItem *ipDoneButton = [[UIBarButtonItem alloc]
-                                     initWithTitle:@"Done"
-                                     style:UIBarButtonItemStyleDone
-                                     target:self
-                                     action:@selector(dismissKeyboard)];
-    ipToolbar.items = @[ipFlex, ipDoneButton];
-    [ipToolbar sizeToFit];
-    self.ipField.inputAccessoryView = ipToolbar;
-    [self.view addSubview:self.ipField];
-    
-    // 8) Connection state label
-    // Assuming self.ipField is already created and added:
-    CGFloat connectionStateX = CGRectGetMaxX(self.ipField.frame) + 10; // 10 points of spacing
-    self.connectionStateLabel = [[UILabel alloc] initWithFrame:CGRectMake(connectionStateX, y, 250, fieldHeight)];
-//    self.connectionStateLabel.text = @""; // Text and color updated in setConnectionStateFromGsProConnector
-//    self.connectionStateLabel.textColor = APP_COLOR_TEXT;
-    [self.view addSubview:self.connectionStateLabel];
-    y += fieldHeight + 20;
-    
-    // 9) Export button
-//    UIButton *exportButton = [UIButton buttonWithType:UIButtonTypeSystem];
-//    [exportButton setTitle:@"Export shots" forState:UIControlStateNormal];
-//    exportButton.frame = CGRectMake(x, y, 180, 40);
-//    [exportButton setTitleColor:APP_COLOR_TEXT forState:UIControlStateNormal];
-//    exportButton.backgroundColor = APP_COLOR_ACCENT;
-//    exportButton.layer.cornerRadius = 4.0;
-//    [exportButton addTarget:self action:@selector(exportButtonPressed) forControlEvents:UIControlEventTouchUpInside];
-//    [self.view addSubview:exportButton];
-    y += 60;
-    
-    // Create the support button.
-    UIButton *supportButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    supportButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [supportButton setTitle:@"Questions & Support" forState:UIControlStateNormal];
-    [supportButton setTitleColor:APP_COLOR_ACCENT forState:UIControlStateNormal];
-    [supportButton addTarget:self action:@selector(supportButtonPressed) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:supportButton];
-    
-    // Create the footer label.
-    UILabel *footerLabel = [[UILabel alloc] init];
-    footerLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    footerLabel.text = @"© 2025 Heapsheeps LLC";
-    footerLabel.font = [UIFont systemFontOfSize:13.0];
-    footerLabel.textColor = APP_COLOR_DARK_TEXT;
-    [self.view addSubview:footerLabel];
-    
-    // Activate constraints pairing the anchors.
-    [NSLayoutConstraint activateConstraints:@[
-        // Footer label centered horizontally and 10 points above container's safe area bottom.
-        [footerLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor constant:-50],
-        [footerLabel.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-10],
-        
-        // Support button centered horizontally and 10 points above the footer label.
-        [supportButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor constant:-50],
-        [supportButton.bottomAnchor constraintEqualToAnchor:footerLabel.topAnchor constant:-10]
-    ]];
-    
-    // Observe keyboard notifications
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(keyboardWillShow:)
-                                                 name:UIKeyboardWillShowNotification
-                                               object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(keyboardWillHide:)
-                                                 name:UIKeyboardWillHideNotification
-                                               object:nil];
-    
-    // Observe GSPro connection state notifications
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(handleGSProConnectionState:)
-                                                 name:GSProConnectionStateNotification
-                                               object:nil];
-    
-    
-    [self setConnectionStateFromGsProConnector:nil];
+    UIToolbar *t = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 0, 44)];
+    UIBarButtonItem *done = [[UIBarButtonItem alloc] initWithTitle:@"Done" style:UIBarButtonItemStyleDone target:self action:@selector(dismissKeyboard)];
+    t.items = @[[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil], done];
+    self.ipField.inputAccessoryView = t;
 }
+
+// --- LOGIC METHODS ---
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    
-    // Load settings from SettingsManager
     SettingsManager *mgr = [SettingsManager shared];
+
+    BOOL useOGS = [[NSUserDefaults standardUserDefaults] boolForKey:@"use_ogs"];
+    self.targetControl.selectedSegmentIndex = useOGS ? 0 : 1;
+    [self updateConnectionLogic:useOGS];
+
+    NSString *savedIP = [[NSUserDefaults standardUserDefaults] stringForKey:@"simulator_ip"];
+    if (!savedIP) savedIP = mgr.gsProIP;
+    self.ipField.text = savedIP;
+
+    float fps = [[NSUserDefaults standardUserDefaults] floatForKey:@"camera_fps"];
+    if (fps < 2.0) { fps = 2.0; [[NSUserDefaults standardUserDefaults] setFloat:fps forKey:@"camera_fps"]; }
+    self.fpsSlider.value = fps;
+    self.fpsValueLabel.text = [NSString stringWithFormat:@"%.0f fps", fps];
     
-    // Update stimp field value
-    NSInteger stimp = mgr.stimp; // e.g. 10
+    NSInteger stimp = mgr.stimp;
     NSInteger rowIndex = [self.stimpValues indexOfObject:@(stimp)];
-    if (rowIndex == NSNotFound) {
-        rowIndex = 5; // default stimp=10
-    }
+    if (rowIndex == NSNotFound) rowIndex = 5;
     self.selectedStimpIndex = rowIndex;
     [self.stimpPicker selectRow:rowIndex inComponent:0 animated:NO];
     self.stimpField.text = [NSString stringWithFormat:@"%@", self.stimpValues[rowIndex]];
     
-    // Update fairway control
     self.fairwayControl.selectedSegmentIndex = mgr.fairwaySpeedIndex;
-    
-    // Update IP field
-    self.ipField.text = mgr.gsProIP;
 }
 
-- (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
-}
-
-#pragma mark - Keyboard
-
-- (void)keyboardWillShow:(NSNotification *)notification {
-    CGRect kbFrame = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
-    if (CGRectEqualToRect(self.view.frame, self.originalFrame)) {
-        CGFloat shift = kbFrame.size.height / 2;
-        self.view.frame = CGRectOffset(self.view.frame, 0, -shift);
-    }
-}
-
-- (void)keyboardWillHide:(NSNotification *)notification {
-    self.view.frame = self.originalFrame;
-}
-
-- (void)dismissKeyboard {
-    [self.view endEditing:YES];
-}
-
-#pragma mark - GSPro Connection
-
-- (void)setConnectionStateFromGsProConnector:(NSString *)state {
-    // Determine the connection string
-    NSString *connectionString = (state != nil) ? state : [[GSProConnector shared] getConnectionState];
-    
-    // Update the label text
-    self.connectionStateLabel.text = connectionString;
-    
-    // Set the appropriate text color based on connection state
-    if ([connectionString isEqualToString:@"Connected"]) {
-        self.connectionStateLabel.textColor = APP_COLOR_GREEN;
-    } else if ([connectionString isEqualToString:@"Connecting"]) {
-        self.connectionStateLabel.textColor = APP_COLOR_YELLOW;
+- (void)updateConnectionLogic:(BOOL)isOGS {
+    if (isOGS) {
+        BOOL connected = [[OGSConnector shared] isConnected];
+        self.statusLight.backgroundColor = connected ? [UIColor greenColor] : [UIColor redColor];
     } else {
-        self.connectionStateLabel.textColor = APP_COLOR_DARK_TEXT;
+        BOOL connected = NO;
+        if ([[GSProConnector shared] respondsToSelector:@selector(isConnected)]) {
+            connected = [[GSProConnector shared] isConnected];
+        }
+        self.statusLight.backgroundColor = connected ? [UIColor greenColor] : [UIColor redColor];
     }
 }
 
-- (void)handleGSProConnectionState:(NSNotification *)notification {
-    NSString *connectionState = notification.userInfo[@"connectionState"];
-    if (!connectionState)
-        return;
-    
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self setConnectionStateFromGsProConnector:connectionState];
-    });
+- (void)refreshStatusLight {
+    BOOL isOGS = (self.targetControl.selectedSegmentIndex == 0);
+    [self updateConnectionLogic:isOGS];
 }
 
-#pragma mark - UITextFieldDelegate
+- (void)targetControlChanged:(UISegmentedControl *)sender {
+    BOOL isOGS = (sender.selectedSegmentIndex == 0);
+    [[NSUserDefaults standardUserDefaults] setBool:isOGS forKey:@"use_ogs"];
+    [self updateConnectionLogic:isOGS];
+    
+    if (isOGS) {
+        [[GSProConnector shared] disconnect];
+        NSString *ip = self.ipField.text;
+        if (ip.length > 0) [[OGSConnector shared] connectToIP:ip port:3111];
+    } else {
+        [[OGSConnector shared] disconnect];
+        NSString *ip = self.ipField.text;
+        if (ip.length > 0) [[GSProConnector shared] connectToServerWithIP:ip port:921];
+    }
+}
 
-- (BOOL)textFieldShouldReturn:(UITextField *)textField {
-    [textField resignFirstResponder];
-    return YES;
+- (void)fpsSliderChanged:(UISlider *)sender {
+    int roundedFPS = (int)roundf(sender.value);
+    [sender setValue:roundedFPS animated:NO];
+    self.fpsValueLabel.text = [NSString stringWithFormat:@"%d fps", roundedFPS];
+    [[NSUserDefaults standardUserDefaults] setFloat:(float)roundedFPS forKey:@"camera_fps"];
 }
 
 - (void)textFieldDidEndEditing:(UITextField *)textField {
     if (textField == self.ipField) {
-        SettingsManager *mgr = [SettingsManager shared];
-        [mgr setGSProIP:textField.text];
-        [mgr saveSettings];
+        [[NSUserDefaults standardUserDefaults] setObject:textField.text forKey:@"simulator_ip"];
+        [[SettingsManager shared] setGSProIP:textField.text];
+        [[SettingsManager shared] saveSettings];
+        [self forceReconnect];
     }
 }
 
-#pragma mark - UIPickerViewDataSource
-
-- (NSInteger)numberOfComponentsInPickerView:(UIPickerView *)pickerView {
-    return 1;
+- (void)forceReconnect {
+    BOOL isOGS = (self.targetControl.selectedSegmentIndex == 0);
+    [[GSProConnector shared] disconnect];
+    [[OGSConnector shared] disconnect];
+    NSString *ip = self.ipField.text;
+    if (ip.length > 0) {
+        if (isOGS) [[OGSConnector shared] connectToIP:ip port:3111];
+        else [[GSProConnector shared] connectToServerWithIP:ip port:921];
+    }
+    [self updateConnectionLogic:isOGS];
 }
 
-- (NSInteger)pickerView:(UIPickerView *)pickerView numberOfRowsInComponent:(NSInteger)component {
-    return self.stimpValues.count;
-}
-
-#pragma mark - UIPickerViewDelegate
-
-- (NSString *)pickerView:(UIPickerView *)pickerView titleForRow:(NSInteger)row forComponent:(NSInteger)component {
-    NSNumber *value = self.stimpValues[row];
-    return [value stringValue];
-}
-
-- (void)pickerView:(UIPickerView *)pickerView didSelectRow:(NSInteger)row inComponent:(NSInteger)component {
-    self.selectedStimpIndex = row;
-    NSInteger selectedStimp = [self.stimpValues[row] integerValue];
-    self.stimpField.text = [NSString stringWithFormat:@"%ld", (long)selectedStimp];
+- (void)testConnectionPressed {
+    BOOL isOGS = (self.targetControl.selectedSegmentIndex == 0);
     
-    SettingsManager *mgr = [SettingsManager shared];
-    mgr.stimp = selectedStimp;
-    [mgr saveSettings];
+    id connector = isOGS ? [OGSConnector shared] : [GSProConnector shared];
+    
+    if (![connector isConnected]) {
+        NSString *ip = self.ipField.text;
+        if (isOGS) [[OGSConnector shared] connectToIP:ip port:3111];
+        else [[GSProConnector shared] connectToServerWithIP:ip port:921];
+        
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if ([connector isConnected]) { /* OK */ }
+        });
+    }
+    
+    NSDictionary *ballData = @{
+        @"Speed": @(150),
+        @"VLA": @(12.5),
+        @"HLA": @(1.5),
+        @"TotalSpin": @(2500),
+        @"SpinAxis": @(-2.0),
+        @"CarryDistance": @(250),
+        @"TotalDistance": @(270),
+        @"Height": @(32)
+    };
+    
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"ScreenDataProcessorNewBallDataNotification"
+                                                        object:nil
+                                                      userInfo:@{@"data": ballData}];
+    
+    NSDictionary *clubData = @{
+        @"Speed": @(105),
+        @"Path": @(2.3),
+        @"AngleOfAttack": @(-1.5)
+    };
+    
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"ScreenDataProcessorNewClubDataNotification"
+                                                            object:nil
+                                                          userInfo:@{@"data": clubData}];
+    });
+    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Sent" message:@"Test shot data sent." preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
-
-#pragma mark - Fairway Control
 
 - (void)fairwayControlChanged:(UISegmentedControl *)sender {
     SettingsManager *mgr = [SettingsManager shared];
@@ -322,21 +426,39 @@
     [mgr saveSettings];
 }
 
-- (void)exportButtonPressed {
-    [[DataModel shared] exportShots];
+- (void)supportButtonPressed {
+    [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"https://www.heapsheeps.com"] options:@{} completionHandler:nil];
 }
 
-- (void)supportButtonPressed {
-    NSURL *url = [NSURL URLWithString:@"https://www.heapsheeps.com"]; // TODO
-    if ([[UIApplication sharedApplication] canOpenURL:url]) {
-        [[UIApplication sharedApplication] openURL:url
-                                           options:@{}
-                                 completionHandler:^(BOOL success) {
-                NSLog(@"URL opened: %d", success);
-            }
-        ];
-    }
+- (void)dismissKeyboard {
+    [self.view endEditing:YES];
+}
 
+#pragma mark - Picker Delegate
+- (NSInteger)numberOfComponentsInPickerView:(UIPickerView *)pickerView { return 1; }
+- (NSInteger)pickerView:(UIPickerView *)pickerView numberOfRowsInComponent:(NSInteger)component { return self.stimpValues.count; }
+- (NSString *)pickerView:(UIPickerView *)pickerView titleForRow:(NSInteger)row forComponent:(NSInteger)component { return [self.stimpValues[row] stringValue]; }
+- (void)pickerView:(UIPickerView *)pickerView didSelectRow:(NSInteger)row inComponent:(NSInteger)component {
+    self.selectedStimpIndex = row;
+    NSInteger selectedStimp = [self.stimpValues[row] integerValue];
+    self.stimpField.text = [NSString stringWithFormat:@"%ld", (long)selectedStimp];
+    SettingsManager *mgr = [SettingsManager shared];
+    mgr.stimp = selectedStimp;
+    [mgr saveSettings];
+}
+
+#pragma mark - Keyboard Handling
+- (void)keyboardWillShow:(NSNotification *)notification {
+    NSDictionary* info = [notification userInfo];
+    CGSize kbSize = [[info objectForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue].size;
+    UIEdgeInsets contentInsets = UIEdgeInsetsMake(0.0, 0.0, kbSize.height, 0.0);
+    self.scrollView.contentInset = contentInsets;
+    self.scrollView.scrollIndicatorInsets = contentInsets;
+}
+
+- (void)keyboardWillHide:(NSNotification *)notification {
+    self.scrollView.contentInset = UIEdgeInsetsZero;
+    self.scrollView.scrollIndicatorInsets = UIEdgeInsetsZero;
 }
 
 @end

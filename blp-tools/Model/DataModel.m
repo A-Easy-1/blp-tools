@@ -1,6 +1,7 @@
 #import "DataModel.h"
 #import "CameraManager.h"
 #import "GSProConnector.h"
+#import "OGSConnector.h" // <--- NEW: Import OGS
 #import "SettingsManager.h"
 #import "ModelManager.h"
 #import "ShotManager.h"
@@ -11,7 +12,9 @@
     @property (nonatomic, strong) ScreenDataProcessor *screenDataProcessor;
     @property (nonatomic, assign) int shotNumber;
     @property (nonatomic, assign) int gsProPort;
+    @property (nonatomic, assign) int ogsPort; // <--- NEW
     @property (nonatomic, strong) ShotManager *shotManager;
+    @property (atomic, assign) BOOL isProcessingPaused;
 @end
 
 @implementation DataModel
@@ -28,97 +31,84 @@
 - (instancetype)init {
     self = [super init];
     if (self) {
-        // Listen for new frames
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(processFrame:)
-                                                     name:CameraManagerNewFrameNotification
-                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(processFrame:) name:CameraManagerNewFrameNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(updateCorners:) name:ScreenDataProcessorNewCornersNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleNewBallData:) name:ScreenDataProcessorNewBallDataNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleNewClubData:) name:ScreenDataProcessorNewClubDataNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleIpChanged:) name:GSProIPChangedNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(startMiniGame:) name:MiniGameStartNotification object:nil];
         
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(updateCorners:)
-                                                     name:ScreenDataProcessorNewCornersNotification
-                                                   object:nil];
-        
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(handleNewBallData:)
-                                                     name:ScreenDataProcessorNewBallDataNotification
-                                                   object:nil];
-        
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(handleNewClubData:)
-                                                     name:ScreenDataProcessorNewClubDataNotification
-                                                   object:nil];
-        
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(handleIpChanged:)
-                                                     name:GSProIPChangedNotification
-                                                   object:nil];
-        
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(startMiniGame:)
-                                                     name:MiniGameStartNotification
-                                                   object:nil];
-        
-        [UIApplication sharedApplication].idleTimerDisabled = YES; // Prevent the app from going to sleep
+        [UIApplication sharedApplication].idleTimerDisabled = YES;
+        self.isProcessingPaused = NO;
         
         self.currentShotBallData = nil;
         self.currentShotClubData = nil;
-        self.currentShotBallImage = nil;
-        self.currentShotClubImage = nil;
-        
         self.shotNumber = -1;
-        
         self.gsProPort = 921;
+        self.ogsPort = 3111; // Standard OGS Port
+        
         self.screenDataProcessor = [[ScreenDataProcessor alloc] init];
         [SettingsManager shared];
         [[CameraManager shared] startCamera];
-        [[GSProConnector shared] connectToServerWithIP:[SettingsManager shared].gsProIP port:self.gsProPort];
         
         self.shotManager = [[ShotManager alloc] init];
         
-        // Load CV models
-        NSError *error = nil;
-        if (![[ModelManager shared] loadModelWithName:@"hla-direction" error:&error]) {
-            NSLog(@"Failed to load model: %@", error.localizedDescription);
+        // --- ROUTING LOGIC ON STARTUP ---
+        NSString *ip = [SettingsManager shared].gsProIP;
+        BOOL useOGS = [[NSUserDefaults standardUserDefaults] boolForKey:@"use_ogs"];
+        
+        if (useOGS) {
+            NSLog(@"[DataModel] Startup: Connecting to OpenGolf (OGS) at %@:%d", ip, self.ogsPort);
+            [[OGSConnector shared] connectToIP:ip port:self.ogsPort];
+        } else {
+            NSLog(@"[DataModel] Startup: Connecting to GSPro at %@:%d", ip, self.gsProPort);
+            [[GSProConnector shared] connectToServerWithIP:ip port:self.gsProPort];
         }
-        if (![[ModelManager shared] loadModelWithName:@"spin-axis-direction" error:&error]) {
-            NSLog(@"Failed to load model: %@", error.localizedDescription);
-        }
-        if (![[ModelManager shared] loadModelWithName:@"ball-speed-units" error:&error]) {
-            NSLog(@"Failed to load model: %@", error.localizedDescription);
-        }
-        if (![[ModelManager shared] loadModelWithName:@"carry-units" error:&error]) {
-            NSLog(@"Failed to load model: %@", error.localizedDescription);
-        }
-        if (![[ModelManager shared] loadModelWithName:@"club-speed-units" error:&error]) {
-            NSLog(@"Failed to load model: %@", error.localizedDescription);
-        }
-        if (![[ModelManager shared] loadModelWithName:@"path-direction" error:&error]) {
-            NSLog(@"Failed to load model: %@", error.localizedDescription);
-        }
-        if (![[ModelManager shared] loadModelWithName:@"aoa-direction" error:&error]) {
-            NSLog(@"Failed to load model: %@", error.localizedDescription);
+        
+        NSArray *models = @[@"hla-direction", @"spin-axis-direction", @"ball-speed-units", @"carry-units", @"club-speed-units", @"path-direction", @"aoa-direction"];
+        for (NSString *model in models) {
+            [[ModelManager shared] loadModelWithName:model error:nil];
         }
     }
     return self;
 }
 
+- (void)setProcessingPaused:(BOOL)paused {
+    self.isProcessingPaused = paused;
+    NSLog(@"[DataModel] Processing Paused: %@", paused ? @"YES" : @"NO");
+}
+
+// Standard Dispersion Logic (Unchanged from your file)
+- (NSDictionary *)calculateShotCoordinates:(NSDictionary *)shotData {
+    if (!shotData) return @{};
+
+    double totalDistance = [shotData[@"TotalDistance"] doubleValue];
+    double hla = [shotData[@"HLA"] doubleValue];
+    double spinAxis = [shotData[@"SpinAxis"] doubleValue];
+
+    double hlaRad = hla * (M_PI / 180.0);
+    double launchOffline = totalDistance * sin(hlaRad);
+
+    double curveFactor = 0.006;
+    double curveOffline = totalDistance * spinAxis * curveFactor;
+
+    double totalOffline = launchOffline + curveOffline;
+
+    return @{
+        @"CalcOffline": @(totalOffline),
+        @"CalcOfflineAbs": @(fabs(totalOffline))
+    };
+}
+
 - (void)processFrame:(NSNotification *)notification {
+    if (self.isProcessingPaused) return;
+
     UIImage *frame = notification.userInfo[@"frame"];
-    if (!frame)
-        return;
+    if (!frame) return;
     
-    // Rate limit the processing.
-    //  This exists because the detections/OCR can produce wrong results from time to time,
-    //  especially if the frame is captured while the screen is changing. There is a mechanism
-    //  in screenDataProcessor that ensures we only call a frame "correct" if it decodes the
-    //  same results twice in a row. By looking at frames spaced farther apart (i.e. 200+ ms
-    //  rather than 15-30), these issues seem to not occur.
     static NSTimeInterval lastCallTime = 0;
     NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
-    if (currentTime - lastCallTime < OCR_RATE_SECONDS) { // X seconds
-        return;
-    }
+    if (currentTime - lastCallTime < OCR_RATE_SECONDS) return;
     lastCallTime = currentTime;
 
     NSError *error = nil;
@@ -128,204 +118,104 @@
     }
 }
 
-- (void)updateCorners:(NSNotification *)notification {
-    NSArray *corners = notification.userInfo[@"corners"];
-    if (!corners)
-        return;
-    
-    self.screenCorners = [corners copy];
-}
-
 - (void)handleNewBallData:(NSNotification *)notification {
     UIImage *image = notification.userInfo[@"image"];
-    if (image)
-        self.currentShotBallImage = image;
+    if (image) self.currentShotBallImage = image;
     
     NSDictionary *data = notification.userInfo[@"data"];
-    if (!data)
-        return;
+    if (!data) return;
     
-    self.currentShotBallData = [data copy];
+    NSMutableDictionary *enhancedData = [data mutableCopy];
+    
+    NSDictionary *physics = [self calculateShotCoordinates:enhancedData];
+    [enhancedData addEntriesFromDictionary:physics];
+    
+    self.currentShotBallData = [enhancedData copy];
     self.currentShotClubData = nil;
     self.shotNumber++;
     
-    NSLog(@"Got new BALL data (shot #%d): %@", self.shotNumber, data);
+    NSLog(@"Got new BALL data (shot #%d): %@", self.shotNumber, self.currentShotBallData);
     
     [self.shotManager addShot:self.currentShotBallData];
     
-    [[GSProConnector shared] sendShotWithBallData:self.currentShotBallData
-                                         clubData:nil
-                                       shotNumber:(int)self.shotNumber];
+    // --- ROUTING LOGIC ---
+    // Check where to send data based on settings
+    BOOL useOGS = [[NSUserDefaults standardUserDefaults] boolForKey:@"use_ogs"];
+    if (useOGS) {
+        [[OGSConnector shared] sendShotWithBallData:self.currentShotBallData clubData:nil shotNumber:self.shotNumber];
+    } else {
+        [[GSProConnector shared] sendShotWithBallData:self.currentShotBallData clubData:nil shotNumber:self.shotNumber];
+    }
     
-    DEBUG_SAVE_SHOT_DATA(image, data, self.shotNumber);
+    [self DEBUG_saveShotImage:image withData:self.currentShotBallData andShotNumber:self.shotNumber];
 }
 
 - (void)handleNewClubData:(NSNotification *)notification {
-    if(self.currentShotClubData || !self.currentShotBallData) {
-        // We already have club data for this shot, ignore this until we get new shot data
-        // OR we haven't received any ball data yet, ignore until we get the first shot
-        return;
-    }
+    if(!self.currentShotBallData) return;
     
     UIImage *image = notification.userInfo[@"image"];
-    if (image)
-        self.currentShotClubImage = image;
+    if (image) self.currentShotClubImage = image;
     
     NSDictionary *data = notification.userInfo[@"data"];
-    if (!data)
-        return;
+    if (!data) return;
     
     self.currentShotClubData = [data copy];
     [self.shotManager updateShotClubData:self.currentShotClubData];
     
     NSLog(@"Got new CLUB data (shot #%d): %@", self.shotNumber, data);
     
-    [[GSProConnector shared]  sendShotWithBallData:nil
-                                          clubData:self.currentShotClubData
-                                        shotNumber:(int)self.shotNumber];
+    // --- ROUTING LOGIC ---
+    BOOL useOGS = [[NSUserDefaults standardUserDefaults] boolForKey:@"use_ogs"];
+    if (useOGS) {
+        [[OGSConnector shared] sendShotWithBallData:nil clubData:self.currentShotClubData shotNumber:self.shotNumber];
+    } else {
+        [[GSProConnector shared] sendShotWithBallData:nil clubData:self.currentShotClubData shotNumber:self.shotNumber];
+    }
     
-    DEBUG_SAVE_SHOT_DATA(image, data, self.shotNumber);
+    [self DEBUG_saveShotImage:image withData:data andShotNumber:self.shotNumber];
 }
 
-- (void)handleIpChanged:(NSNotification *)notification {
-    NSString *ip = notification.userInfo[@"gsProIP"];
-    if (!ip)
-        return;
+- (void)handleIpChanged:(NSNotification *)n {
+    NSString *ip = n.userInfo[@"gsProIP"];
+    if (!ip) return;
     
-    [[GSProConnector shared] connectToServerWithIP:ip port:self.gsProPort];
+    BOOL useOGS = [[NSUserDefaults standardUserDefaults] boolForKey:@"use_ogs"];
+    
+    // Disconnect both to be safe
+    [[GSProConnector shared] disconnect];
+    [[OGSConnector shared] disconnect];
+    
+    if (useOGS) {
+        NSLog(@"[DataModel] IP Changed: Connecting to OpenGolf (OGS) at %@:%d", ip, self.ogsPort);
+        [[OGSConnector shared] connectToIP:ip port:self.ogsPort];
+    } else {
+        NSLog(@"[DataModel] IP Changed: Connecting to GSPro at %@:%d", ip, self.gsProPort);
+        [[GSProConnector shared] connectToServerWithIP:ip port:self.gsProPort];
+    }
 }
 
 - (void)startMiniGame:(NSNotification *)notification {
     NSString *gameType = notification.userInfo[@"gameType"];
-    if (!gameType)
-        return;
+    NSNumber *min = notification.userInfo[@"minDistance"];
+    NSNumber *max = notification.userInfo[@"maxDistance"];
+    NSString *fmt = notification.userInfo[@"format"];
+    NSNumber *shots = notification.userInfo[@"numberOfShots"];
+    NSString *skill = notification.userInfo[@"skillLevel"];
     
-    NSNumber *minDistanceNumber = notification.userInfo[@"minDistance"];
-    if (!minDistanceNumber || ![minDistanceNumber isKindOfClass:[NSNumber class]])
-        return;
-    int minDistance = [minDistanceNumber intValue];
-    
-    NSNumber *maxDistanceNumber = notification.userInfo[@"maxDistance"];
-    if (!maxDistanceNumber || ![maxDistanceNumber isKindOfClass:[NSNumber class]])
-        return;
-    int maxDistance = [maxDistanceNumber intValue];
-    
-    NSString *format = notification.userInfo[@"format"];
-    if (!format)
-        return;
-    
-    NSNumber *numberOfShotsNumber = notification.userInfo[@"numberOfShots"];
-    if (!numberOfShotsNumber || ![numberOfShotsNumber isKindOfClass:[NSNumber class]])
-        return;
-    int numberOfShots = [numberOfShotsNumber intValue];
-    
-    self.shotManager.miniGameManager = [[MiniGameManager alloc] initWithGameType:gameType
-                                                                     minDistance:minDistance
-                                                                     maxDistance:maxDistance
-                                                                          format:format
-                                                                   numberOfShots:numberOfShots];
+    if (gameType && min && max && fmt && shots) {
+        self.shotManager.miniGameManager = [[MiniGameManager alloc] initWithGameType:gameType minDistance:min.intValue maxDistance:max.intValue format:fmt numberOfShots:shots.intValue skillLevel:skill];
+    }
 }
 
-- (void)exportShots {
-    NSString *shotCsv = [self.shotManager exportShotsAsCSV];
+- (void)updateCorners:(NSNotification *)n { self.screenCorners = n.userInfo[@"corners"]; }
+- (MiniGameManager*)getMiniGameManager { return self.shotManager.miniGameManager; }
+- (void)endMiniGameEarly { self.shotManager.miniGameManager = nil; }
+- (void)exportShots { [self.shotManager exportShotsAsCSV]; }
 
-    // Generate timestamp string (yyyy-MM-dd-HH-mm)
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    [formatter setDateFormat:@"yyyy-MM-dd-HH-mm"];
-    NSString *timestamp = [formatter stringFromDate:[NSDate date]];
-
-    // Define file name with timestamp
-    NSString *fileName = [NSString stringWithFormat:@"shots_%@.csv", timestamp];
-    
-    // Get temporary directory path
-    NSURL *temporaryDirectory = [NSURL fileURLWithPath:NSTemporaryDirectory()];
-    NSURL *fileURL = [temporaryDirectory URLByAppendingPathComponent:fileName];
-
-    // Write CSV data to file
-    NSError *error;
-    BOOL success = [shotCsv writeToURL:fileURL atomically:YES encoding:NSUTF8StringEncoding error:&error];
-
-    if (!success) {
-        NSLog(@"Error writing CSV file: %@", error.localizedDescription);
-        return;
-    }
-
-    // Create activity view controller for sharing
-    UIActivityViewController *activityVC = [[UIActivityViewController alloc] initWithActivityItems:@[fileURL] applicationActivities:nil];
-
-    // Exclude certain activities if necessary
-    activityVC.excludedActivityTypes = @[UIActivityTypeAssignToContact, UIActivityTypePostToFacebook];
-
-    // Find the active window's root view controller
-    UIWindow *keyWindow = nil;
-    for (UIWindowScene *windowScene in [UIApplication sharedApplication].connectedScenes) {
-        if (windowScene.activationState == UISceneActivationStateForegroundActive) {
-            for (UIWindow *window in windowScene.windows) {
-                if (window.isKeyWindow) {
-                    keyWindow = window;
-                    break;
-                }
-            }
-        }
-        if (keyWindow) {
-            break;
-        }
-    }
-
-    // Present the sharing sheet
-    [keyWindow.rootViewController presentViewController:activityVC animated:YES completion:nil];
-}
-
-- (MiniGameManager*)getMiniGameManager {
-    return self.shotManager.miniGameManager;
-}
-
-- (void)endMiniGameEarly {
-    self.shotManager.miniGameManager = nil;
-}
-
-- (void)DEBUG_saveShotImage:(UIImage *)warpedImage
-                   withData:(NSDictionary *)data
-              andShotNumber:(int)shotNumber
-{
-    static NSString *timestamp = nil;
-    if (!timestamp) {
-        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        formatter.dateFormat = @"yyyyMMdd_HHmm"; // e.g. 20240305_1530
-        timestamp = [formatter stringFromDate:[NSDate date]];
-    }
-    
-    // 1) Figure out the Documents folder and a subfolder named <timestamp>.
-    NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-
-    // 3) Build a base name "<timestamp>/<timestamp>-%04d" for the image.
-    BOOL hasCarryDistance = ([data objectForKey:@"CarryDistance"] != nil);
-    NSString *ballOrClubSuffix = hasCarryDistance ? @"ball" : @"club";
-    NSString *baseName = [NSString stringWithFormat:@"%@-%04d-%@", timestamp, shotNumber, ballOrClubSuffix];
-    
-    // 4) Save the warped image as a .png in the <timestamp> directory.
-    //    This calls your existing utility method.
-    NSString *imageFileName = [baseName stringByAppendingString:@".png"];
-    [ImageUtilities saveImageToDocuments:warpedImage fileName:imageFileName];
-    
-    // 6) Construct the JSON filename:
-    NSString *jsonFileName = [baseName stringByAppendingString:@".json"];
-    NSString *jsonFilePath = [documentsPath stringByAppendingPathComponent:jsonFileName];
-
-    // 7) Serialize the data dictionary to JSON and write it out.
-    NSError *jsonError = nil;
-    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:data
-                                                       options:NSJSONWritingPrettyPrinted
-                                                         error:&jsonError];
-    if (jsonError) {
-        NSLog(@"Error serializing JSON: %@", jsonError.localizedDescription);
-        return;
-    }
-
-    BOOL writeSuccess = [jsonData writeToFile:jsonFilePath atomically:YES];
-    if (!writeSuccess) {
-        NSLog(@"Failed to write JSON to file: %@", jsonFilePath);
-    }
+- (void)DEBUG_saveShotImage:(UIImage *)img withData:(NSDictionary *)data andShotNumber:(int)num {
+    if(!img) return;
+    NSString *name = [NSString stringWithFormat:@"shot_%04d.png", num];
+    [ImageUtilities saveImageToDocuments:img fileName:name];
 }
 
 @end

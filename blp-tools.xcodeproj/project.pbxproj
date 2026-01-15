@@ -7,10 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0A532C502DA3CD1C006D207A /* opencv2.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0A532C4F2DA3CD1C006D207A /* opencv2.xcframework */; };
 		0ADFD5642D0C1FC600B5D6AA /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0ADFD5632D0C1FC600B5D6AA /* CoreMedia.framework */; };
 		0ADFD5662D0C1FCB00B5D6AA /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0ADFD5652D0C1FCB00B5D6AA /* Vision.framework */; };
 		0ADFD5682D0C1FCF00B5D6AA /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0ADFD5672D0C1FCF00B5D6AA /* AVFoundation.framework */; };
+		BC194DC02F15B28A008DDD8D /* opencv2.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC194DBE2F15B28A008DDD8D /* opencv2.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -24,19 +24,18 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		0A532C4F2DA3CD1C006D207A /* opencv2.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = opencv2.xcframework; path = "opencv-ios-framework/opencv2.xcframework"; sourceTree = "<group>"; };
 		0AC1CA152D842A0C00873D34 /* blp-tools-tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "blp-tools-tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0ADFD5352D0C1F7000B5D6AA /* blp-tools.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "blp-tools.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0ADFD5632D0C1FC600B5D6AA /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
 		0ADFD5652D0C1FCB00B5D6AA /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
 		0ADFD5672D0C1FCF00B5D6AA /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		BC194DBE2F15B28A008DDD8D /* opencv2.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = opencv2.framework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
 		0A651A012D7050B800E56FC4 /* Exceptions for "blp-tools" folder in "blp-tools" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				"/Localized: LaunchScreen.storyboard",
 				Info.plist,
 			);
 			target = 0ADFD5342D0C1F7000B5D6AA /* blp-tools */;
@@ -73,7 +72,7 @@
 			files = (
 				0ADFD5682D0C1FCF00B5D6AA /* AVFoundation.framework in Frameworks */,
 				0ADFD5642D0C1FC600B5D6AA /* CoreMedia.framework in Frameworks */,
-				0A532C502DA3CD1C006D207A /* opencv2.xcframework in Frameworks */,
+				BC194DC02F15B28A008DDD8D /* opencv2.framework in Frameworks */,
 				0ADFD5662D0C1FCB00B5D6AA /* Vision.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -84,7 +83,7 @@
 		0ADFD52C2D0C1F7000B5D6AA = {
 			isa = PBXGroup;
 			children = (
-				0A532C4F2DA3CD1C006D207A /* opencv2.xcframework */,
+				BC194DBF2F15B28A008DDD8D /* opencv-ios-framework */,
 				0ADFD5372D0C1F7000B5D6AA /* blp-tools */,
 				0AC1CA162D842A0C00873D34 /* blp-tools-tests */,
 				0ADFD5622D0C1FC600B5D6AA /* Frameworks */,
@@ -109,6 +108,14 @@
 				0ADFD5632D0C1FC600B5D6AA /* CoreMedia.framework */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		BC194DBF2F15B28A008DDD8D /* opencv-ios-framework */ = {
+			isa = PBXGroup;
+			children = (
+				BC194DBE2F15B28A008DDD8D /* opencv2.framework */,
+			);
+			path = "opencv-ios-framework";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -164,7 +171,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastUpgradeCheck = 1620;
+				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					0AC1CA142D842A0C00873D34 = {
 						CreatedOnToolsVersion = 16.2;
@@ -245,12 +252,15 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = HHJ9YALZFN;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.heapsheeps.blp-tools-tests";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ez.blp-tools-tests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/blp-tools.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/blp-tools";
@@ -263,12 +273,15 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = HHJ9YALZFN;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.heapsheeps.blp-tools-tests";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ez.blp-tools-tests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/blp-tools.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/blp-tools";
@@ -285,7 +298,6 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = HHJ9YALZFN;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/blp-tools",
@@ -303,7 +315,7 @@
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "The app uses the camera for OCR.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UILaunchStoryboardName = "Launch Screen";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationLandscapeLeft;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -312,7 +324,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.heapsheeps.blp-tools";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ez.blp-tools";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -321,7 +333,7 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -334,7 +346,6 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = HHJ9YALZFN;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/blp-tools",
@@ -352,7 +363,7 @@
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "The app uses the camera for OCR.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UILaunchStoryboardName = "Launch Screen";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationLandscapeLeft;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -361,7 +372,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.heapsheeps.blp-tools";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ez.blp-tools";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -369,7 +380,7 @@
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -408,6 +419,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 5WCMMG3D4F;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -432,6 +444,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_CFLAGS = "";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 			};
 			name = Debug;
 		};
@@ -470,6 +483,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 5WCMMG3D4F;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -487,6 +501,7 @@
 				MTL_FAST_MATH = YES;
 				OTHER_CFLAGS = "";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				VALIDATE_PRODUCT = NO;
 			};
 			name = Release;
