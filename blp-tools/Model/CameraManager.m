@@ -43,7 +43,7 @@ NSString * const CameraManagerNewFrameNotification = @"CameraManagerNewFrameNoti
     if (self.cameraIsRunning) return;
     self.cameraIsRunning = YES;
     
-    // 1. Start listening for rotation (Critical for iPad)
+    // 1. Start listening for rotation
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(orientationChanged:)
                                                  name:UIDeviceOrientationDidChangeNotification
@@ -58,7 +58,6 @@ NSString * const CameraManagerNewFrameNotification = @"CameraManagerNewFrameNoti
     if (!self.cameraIsRunning) return;
     self.cameraIsRunning = NO;
     
-    // Stop listening for rotation
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     
     dispatch_async(self.cameraQueue, ^{
@@ -93,8 +92,6 @@ NSString * const CameraManagerNewFrameNotification = @"CameraManagerNewFrameNoti
     }
     
     // --- ROTATION FIX START ---
-    // We check if the 'videoOrientation' property exists (it always does on iOS)
-    // and silence the deprecation warning for this specific block.
     AVCaptureConnection *conn = [output connectionWithMediaType:AVMediaTypeVideo];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -121,7 +118,6 @@ NSString * const CameraManagerNewFrameNotification = @"CameraManagerNewFrameNoti
 #pragma mark - Rotation Helpers
 
 - (void)orientationChanged:(NSNotification *)notification {
-    // When device rotates, update camera connection
     AVCaptureConnection *conn = [self.videoOutput connectionWithMediaType:AVMediaTypeVideo];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -132,10 +128,16 @@ NSString * const CameraManagerNewFrameNotification = @"CameraManagerNewFrameNoti
 }
 
 - (AVCaptureVideoOrientation)currentVideoOrientation {
+    // FIX: Lock iPhone to LandscapeLeft (Top-of-Phone to the Right)
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone) {
+        return AVCaptureVideoOrientationLandscapeLeft;
+    }
+
+    // iPad: Allow dynamic rotation
     UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
     switch (orientation) {
         case UIDeviceOrientationPortrait: return AVCaptureVideoOrientationPortrait;
-        case UIDeviceOrientationLandscapeLeft: return AVCaptureVideoOrientationLandscapeRight; // Mirrored for back camera
+        case UIDeviceOrientationLandscapeLeft: return AVCaptureVideoOrientationLandscapeRight;
         case UIDeviceOrientationLandscapeRight: return AVCaptureVideoOrientationLandscapeLeft;
         case UIDeviceOrientationPortraitUpsideDown: return AVCaptureVideoOrientationPortraitUpsideDown;
         default: return AVCaptureVideoOrientationPortrait;
@@ -156,9 +158,8 @@ NSString * const CameraManagerNewFrameNotification = @"CameraManagerNewFrameNoti
 didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
        fromConnection:(AVCaptureConnection *)connection
 {
-    // FPS Throttling
     float targetFPS = [[NSUserDefaults standardUserDefaults] floatForKey:@"camera_fps"];
-    if (targetFPS < 2.0) targetFPS = 15.0; // Default safety
+    if (targetFPS < 2.0) targetFPS = 15.0;
     
     NSTimeInterval minInterval = 1.0 / targetFPS;
     NSTimeInterval now = CACurrentMediaTime();
@@ -193,8 +194,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     
     CGImageRef quartzImage = CGBitmapContextCreateImage(context);
     
-    // CHANGED: Use "Up" because we are now rotating the hardware stream correctly.
-    // If we used "Down" here while rotating hardware, the image would be upside down.
+    // Use "Up" because we handle the rotation in the AVCaptureConnection now
     UIImage *image = [UIImage imageWithCGImage:quartzImage
                                          scale:1.0
                                    orientation:UIImageOrientationUp];
@@ -208,5 +208,3 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 }
 
 @end
-
-

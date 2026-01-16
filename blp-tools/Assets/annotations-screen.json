@@ -1,0 +1,26 @@
+[
+  {
+    "name": "club-screen-pattern",
+    "rect": [
+      0.25375,
+      0.0190625,
+      0.2025,
+      0.1375
+    ],
+    "format": [
+      "SPEED"
+    ]
+  },
+  {
+    "name": "ball-screen-pattern",
+    "rect": [
+      0.0475,
+      0.0140625,
+      0.185,
+      0.135
+    ],
+    "format": [
+      "SPEED"
+    ]
+  }
+]
