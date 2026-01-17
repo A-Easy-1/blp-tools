@@ -1,6 +1,6 @@
 #import "GSProConnector.h"
-#import "DataModel.h"            // <--- Added
-#import "ScreenDataProcessor.h"  // <--- Added for Notification Names
+#import "DataModel.h"            
+#import "ScreenDataProcessor.h"
 
 NSString * const GSProConnectionStateNotification = @"GSProConnectionStateNotification";
 

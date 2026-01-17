@@ -16,13 +16,10 @@
                            error:(NSError **)error {
     self = [super init];
     if (self) {
-        // SAFETY CHECK: If the file path is nil (file missing in bundle), fail gracefully.
         if (!filePath) {
             NSString *msg = [NSString stringWithFormat:@"[ScreenReader] ERROR: JSON file path is nil. Check Copy Bundle Resources for type: %@", configType];
             NSLog(@"%@", msg);
-            if (error) {
-                *error = [NSError errorWithDomain:@"ScreenReaderError" code:404 userInfo:@{NSLocalizedDescriptionKey: msg}];
-            }
+            if (error) *error = [NSError errorWithDomain:@"ScreenReaderError" code:404 userInfo:@{NSLocalizedDescriptionKey: msg}];
             return nil;
         }
 
@@ -40,28 +37,15 @@
                       type:(NSString *)configType
                      error:(NSError **)error {
     
-    // 1. Double check path existence
-    if (![[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
-        if (error) {
-            *error = [NSError errorWithDomain:@"ScreenReaderError" code:404 userInfo:@{NSLocalizedDescriptionKey: @"File does not exist at path"}];
-        }
-        return NO;
-    }
+    if (![[NSFileManager defaultManager] fileExistsAtPath:filePath]) return NO;
 
-    // 2. Read raw data
     NSData *jsonData = [NSData dataWithContentsOfFile:filePath options:0 error:error];
-    if (!jsonData) {
-        return NO;
-    }
+    if (!jsonData) return NO;
     
-    // 3. Parse JSON
     id parsed = [NSJSONSerialization JSONObjectWithData:jsonData
                                                 options:NSJSONReadingMutableContainers
                                                   error:error];
-    if (!parsed || ![parsed isKindOfClass:[NSArray class]]) {
-        NSLog(@"[ScreenReader] JSON format invalid (expected Array) for %@", configType);
-        return NO;
-    }
+    if (!parsed || ![parsed isKindOfClass:[NSArray class]]) return NO;
     
     _configItems = (NSArray<NSDictionary *> *)parsed;
     _configType = configType;
@@ -76,10 +60,7 @@
     if (!image) return @{};
 
     NSMutableDictionary<NSString *, NSString *> *results = [NSMutableDictionary dictionary];
-    
-    if (self.configType) {
-        results[@"type"] = self.configType;
-    }
+    if (self.configType) results[@"type"] = self.configType;
     
     for (NSDictionary *item in self.configItems) {
         NSString *name = item[@"name"];
@@ -87,22 +68,35 @@
         NSArray<NSString *> *customFormat = item[@"format"];
         NSString *modelName = item[@"model"];
         
-        if (!name || !rectArray || rectArray.count < 4) {
-            continue;
-        }
+        if (!name || !rectArray || rectArray.count < 4) continue;
         
-        // rect is [x, y, w, h] in normalized coords (0..1)
         CGFloat x = [rectArray[0] floatValue];
         CGFloat y = [rectArray[1] floatValue];
         CGFloat w = [rectArray[2] floatValue];
         CGFloat h = [rectArray[3] floatValue];
         
-        CGRect roi = CGRectMake(x, y, w, h);
+        // --- FIX: CASE-INSENSITIVE CHECK & CONTROLLED EXPANSION ---
+        // Previous bug: "total-spin" (lowercase) was failing the "Spin" (uppercase) check.
+        // We now use localizedCaseInsensitiveContainsString.
         
+        if ([name localizedCaseInsensitiveContainsString:@"spin"] &&
+            ![name localizedCaseInsensitiveContainsString:@"axis"]) {
+            
+            // Logic: High spin (10,000+) grows significantly to the Left.
+            // Shift Left: 15% of screen width (~135px) to catch leading digits.
+            // Expand Right: 5% of screen width to allow slight growth without hitting "Spin Axis".
+            
+            CGFloat shiftLeft = 0.15;
+            CGFloat expandRight = 0.05;
+            
+            x = fmax(0.0, x - shiftLeft);
+            w = w + shiftLeft + expandRight;
+        }
+        
+        CGRect roi = CGRectMake(x, y, w, h);
         UIImage* processedImage = nil;
         
-        if(modelName == nil) { // Use standard OCR
-            
+        if(modelName == nil) { // Standard OCR
             NSString *recognized = [ImageUtilities performOCR:image
                                              regionOfInterest:roi
                                                   customWords:customFormat
@@ -111,14 +105,22 @@
                                                processedImage:&processedImage
                                                         error:error];
             
+            // --- DEBUG: SAVING DISABLED ---
+            // kept commented out to reduce noise as requested
+            /*
+            if (processedImage) {
+                NSString *debugName = [NSString stringWithFormat:@"debug_roi_%@_%@.png", name, [NSUUID UUID].UUIDString];
+                [ImageUtilities saveImageToDocuments:processedImage fileName:debugName];
+            }
+            */
+            // -----------------------------
+            
             if (error && *error) return nil;
             
             NSCharacterSet *whitespaceSet = [NSCharacterSet characterSetWithCharactersInString:@"\n\t '"];
             NSString *cleanText = [[recognized componentsSeparatedByCharactersInSet:whitespaceSet] componentsJoinedByString:@""];
-            
             if (!cleanText) cleanText = @"";
             
-            // Retry logic for difficult numbers
             if ([cleanText isEqualToString:@""] || [cleanText isEqualToString:@"6"] || [cleanText isEqualToString:@"9"]) {
                 recognized = [ImageUtilities performOCR:image
                                        regionOfInterest:roi
@@ -127,12 +129,9 @@
                                        recognitionLevel:VNRequestTextRecognitionLevelAccurate
                                          processedImage:&processedImage
                                                   error:error];
-                if (error && *error) return nil;
-                
                 cleanText = [[recognized componentsSeparatedByCharactersInSet:whitespaceSet] componentsJoinedByString:@""];
                 if (!cleanText) cleanText = @"";
                 
-                // Strip suffix artifacts if present
                 if ([cleanText hasSuffix:@"0.5"]) {
                     if (cleanText.length > 3) cleanText = [cleanText substringToIndex:cleanText.length - 3];
                 }
@@ -140,18 +139,12 @@
                     if (cleanText.length > 3) cleanText = [cleanText substringFromIndex:3];
                 }
             }
-            
             results[name] = cleanText;
             
         } else {
-            // Use CoreML Model
+            // CoreML (Unchanged)
             VNCoreMLModel *model = [[ModelManager shared] modelWithName:modelName];
-            if (!model) {
-                // Log but don't crash
-                // NSLog(@"Model not found: %@", modelName);
-                results[name] = @"";
-                continue;
-            }
+            if (!model) { results[name] = @""; continue; }
             
             float confidence = 0.0f;
             NSString *recognized = [ImageUtilities runInference:image
@@ -160,11 +153,9 @@
                                                       confidenc:&confidence
                                                  processedImage:&processedImage
                                                           error:error];
-            
             results[name] = recognized ?: @"";
         }
     }
-    
     return [results copy];
 }
 

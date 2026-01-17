@@ -4,7 +4,6 @@
 #import "DataModel.h"
 #import "MiniGameEndViewController.h"
 
-// --- Helper for formatted par strings ---
 NSString *formattedStringFromInteger(NSInteger value) {
     if (value == 0) return @"E";
     else if (value > 0) return [NSString stringWithFormat:@"+%ld", (long)value];
@@ -14,21 +13,14 @@ NSString *formattedStringFromInteger(NSInteger value) {
 @interface LaunchMonitorDataViewController ()
 
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UILabel *> *valueLabels;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, UILabel *> *titleLabels;
 @property (nonatomic, strong) UIStackView *mainGrid;
-
-// Mini Game Elements
 @property (nonatomic, strong) UIView *gameContainer;
 @property (nonatomic, strong) UIView *separatorLine;
 @property (nonatomic, strong) UILabel *miniGameHeaderLabel;
 @property (nonatomic, strong) UIStackView *miniGameRow;
 @property (nonatomic, strong) UIButton *endGameButton;
-
 @property (nonatomic, strong) NSLayoutConstraint *mainGridBottomConstraint;
-
-// Forward Declarations
-- (void)setBallData:(NSDictionary *)data;
-- (void)setClubData:(NSDictionary *)data;
-- (void)updateMiniGameData:(MiniGameManager *)miniGameManager;
 
 @end
 
@@ -38,27 +30,20 @@ NSString *formattedStringFromInteger(NSInteger value) {
     [super viewDidLoad];
     self.view.backgroundColor = APP_COLOR_BG;
     self.valueLabels = [NSMutableDictionary dictionary];
+    self.titleLabels = [NSMutableDictionary dictionary];
 
-    // --- 1. Main Grid ---
     self.mainGrid = [[UIStackView alloc] init];
     self.mainGrid.axis = UILayoutConstraintAxisVertical;
     self.mainGrid.distribution = UIStackViewDistributionFillEqually;
     self.mainGrid.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.mainGrid];
     
-    // Row 1: Basics
     [self.mainGrid addArrangedSubview:[self createRowWithKeys:@[@"Launch Angle (VLA)", @"Apex", @"Carry", @"Total"]]];
-    
-    // Row 2: Direction & Spin
     [self.mainGrid addArrangedSubview:[self createRowWithKeys:@[@"Offline (HLA)", @"Offline (Total)", @"Spin", @"Spin Axis"]]];
-    
-    // Row 3: Club & Speed
     [self.mainGrid addArrangedSubview:[self createRowWithKeys:@[@"Path", @"AOA", @"Club Speed", @"Ball Speed"]]];
     
-    // --- 2. Mini Game Section ---
     [self setupMiniGameUI];
 
-    // --- 3. Constraints ---
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
         [self.mainGrid.topAnchor constraintEqualToAnchor:safe.topAnchor constant:20],
@@ -66,14 +51,11 @@ NSString *formattedStringFromInteger(NSInteger value) {
         [self.mainGrid.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-20]
     ]];
     
-    // Dynamic Bottom Constraint
     self.mainGridBottomConstraint = [self.mainGrid.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-20];
     self.mainGridBottomConstraint.active = YES;
 
     [self setupObservers];
 }
-
-// --- LAYOUT HELPERS ---
 
 - (void)setupMiniGameUI {
     self.gameContainer = [[UIView alloc] init];
@@ -81,13 +63,11 @@ NSString *formattedStringFromInteger(NSInteger value) {
     self.gameContainer.hidden = YES;
     [self.view addSubview:self.gameContainer];
     
-    // 1. Separator
     self.separatorLine = [[UIView alloc] init];
     self.separatorLine.backgroundColor = [UIColor grayColor];
     self.separatorLine.translatesAutoresizingMaskIntoConstraints = NO;
     [self.gameContainer addSubview:self.separatorLine];
     
-    // 2. Header
     self.miniGameHeaderLabel = [[UILabel alloc] init];
     self.miniGameHeaderLabel.text = @"MINI GAME";
     self.miniGameHeaderLabel.font = [UIFont boldSystemFontOfSize:12];
@@ -97,7 +77,6 @@ NSString *formattedStringFromInteger(NSInteger value) {
     self.miniGameHeaderLabel.translatesAutoresizingMaskIntoConstraints = NO;
     [self.gameContainer addSubview:self.miniGameHeaderLabel];
     
-    // 3. Stats Row
     self.miniGameRow = [[UIStackView alloc] init];
     self.miniGameRow.axis = UILayoutConstraintAxisHorizontal;
     self.miniGameRow.distribution = UIStackViewDistributionFillEqually;
@@ -106,50 +85,37 @@ NSString *formattedStringFromInteger(NSInteger value) {
     self.miniGameRow.spacing = 10;
     [self.gameContainer addSubview:self.miniGameRow];
     
-    // FIX: Use specific method for mini game cells to prevent using giant fonts
     [self.miniGameRow addArrangedSubview:[self createMiniGameCell:@"Target"]];
     [self.miniGameRow addArrangedSubview:[self createMiniGameCell:@"Last Score"]];
     [self.miniGameRow addArrangedSubview:[self createMiniGameCell:@"Shots Left"]];
     [self.miniGameRow addArrangedSubview:[self createMiniGameCell:@"Total Score"]];
     
-    // 4. End Button
     self.endGameButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.endGameButton setTitle:@"End" forState:UIControlStateNormal];
     [self.endGameButton setTitleColor:[UIColor redColor] forState:UIControlStateNormal];
-    [self.endGameButton setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
-    
     self.endGameButton.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1.0];
     self.endGameButton.layer.cornerRadius = 8.0;
     self.endGameButton.layer.borderWidth = 1.0;
     self.endGameButton.layer.borderColor = [UIColor redColor].CGColor;
     self.endGameButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
-    
     self.endGameButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.endGameButton.heightAnchor constraintEqualToConstant:36].active = YES;
-    
     [self.endGameButton addTarget:self action:@selector(endMiniGameTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.miniGameRow addArrangedSubview:self.endGameButton];
     
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
-    
-    // Slightly taller container to prevent crunch
-    CGFloat containerHeight = 100.0;
-    
     [NSLayoutConstraint activateConstraints:@[
         [self.gameContainer.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:20],
         [self.gameContainer.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-20],
         [self.gameContainer.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-5],
-        [self.gameContainer.heightAnchor constraintEqualToConstant:containerHeight],
-        
+        [self.gameContainer.heightAnchor constraintEqualToConstant:100],
         [self.separatorLine.topAnchor constraintEqualToAnchor:self.gameContainer.topAnchor constant:5],
         [self.separatorLine.leadingAnchor constraintEqualToAnchor:self.gameContainer.leadingAnchor],
         [self.separatorLine.trailingAnchor constraintEqualToAnchor:self.gameContainer.trailingAnchor],
         [self.separatorLine.heightAnchor constraintEqualToConstant:1],
-        
         [self.miniGameHeaderLabel.centerYAnchor constraintEqualToAnchor:self.separatorLine.centerYAnchor],
         [self.miniGameHeaderLabel.centerXAnchor constraintEqualToAnchor:self.gameContainer.centerXAnchor],
         [self.miniGameHeaderLabel.widthAnchor constraintEqualToConstant:90],
-        
         [self.miniGameRow.topAnchor constraintEqualToAnchor:self.separatorLine.bottomAnchor constant:5],
         [self.miniGameRow.leadingAnchor constraintEqualToAnchor:self.gameContainer.leadingAnchor],
         [self.miniGameRow.trailingAnchor constraintEqualToAnchor:self.gameContainer.trailingAnchor],
@@ -162,107 +128,78 @@ NSString *formattedStringFromInteger(NSInteger value) {
     row.axis = UILayoutConstraintAxisHorizontal;
     row.distribution = UIStackViewDistributionFillEqually;
     row.spacing = 10;
-    
     for (NSString *key in keys) {
-        if ([key isEqualToString:@"Empty"]) {
-            [row addArrangedSubview:[[UIView alloc] init]];
-        } else {
-            [row addArrangedSubview:[self createDataCell:key]];
-        }
+        [row addArrangedSubview:[self createDataCell:key]];
     }
     return row;
 }
 
-// --- MAIN GRID CELLS (Big Numbers) ---
 - (UIView *)createDataCell:(NSString *)title {
     UIView *container = [[UIView alloc] init];
-    
     BOOL isPad = [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad;
     CGFloat titleSize = isPad ? 28.0 : 14.0;
     CGFloat valueSize = isPad ? 80.0 : 32.0;
-
+    
     UILabel *lblTitle = [[UILabel alloc] init];
     lblTitle.text = title;
     lblTitle.textColor = APP_COLOR_ACCENT;
     lblTitle.font = [UIFont systemFontOfSize:titleSize];
     lblTitle.textAlignment = NSTextAlignmentCenter;
-    lblTitle.adjustsFontSizeToFitWidth = YES;
-    lblTitle.minimumScaleFactor = 0.5;
     
     UILabel *lblValue = [[UILabel alloc] init];
     lblValue.text = @"--";
     lblValue.textColor = [UIColor whiteColor];
     lblValue.font = [UIFont boldSystemFontOfSize:valueSize];
     lblValue.textAlignment = NSTextAlignmentCenter;
-    lblValue.adjustsFontSizeToFitWidth = YES;
-    lblValue.minimumScaleFactor = 0.4;
-    lblValue.numberOfLines = 1;
     
     self.valueLabels[title] = lblValue;
+    self.titleLabels[title] = lblTitle;
     
     UIStackView *cellStack = [[UIStackView alloc] initWithArrangedSubviews:@[lblTitle, lblValue]];
     cellStack.axis = UILayoutConstraintAxisVertical;
     cellStack.alignment = UIStackViewAlignmentFill;
     cellStack.distribution = UIStackViewDistributionFill;
-    
-    // FIX: Relaxed spacing (0 for iPad, 2 for iPhone) so it's not "too close"
     cellStack.spacing = isPad ? 0 : 2;
     cellStack.translatesAutoresizingMaskIntoConstraints = NO;
-    
     [container addSubview:cellStack];
-    
     [NSLayoutConstraint activateConstraints:@[
         [cellStack.centerYAnchor constraintEqualToAnchor:container.centerYAnchor],
         [cellStack.leadingAnchor constraintEqualToAnchor:container.leadingAnchor],
         [cellStack.trailingAnchor constraintEqualToAnchor:container.trailingAnchor]
     ]];
-    
     return container;
 }
 
-// --- MINI GAME CELLS (Small Numbers) ---
 - (UIView *)createMiniGameCell:(NSString *)title {
     UIView *container = [[UIView alloc] init];
-    
     BOOL isPad = [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad;
-    
-    // FIX: Much smaller fonts for the mini game footer
     CGFloat titleSize = isPad ? 16.0 : 12.0;
     CGFloat valueSize = isPad ? 32.0 : 20.0;
-
     UILabel *lblTitle = [[UILabel alloc] init];
     lblTitle.text = title;
     lblTitle.textColor = APP_COLOR_ACCENT;
     lblTitle.font = [UIFont systemFontOfSize:titleSize];
     lblTitle.textAlignment = NSTextAlignmentCenter;
-    
     UILabel *lblValue = [[UILabel alloc] init];
     lblValue.text = @"--";
     lblValue.textColor = [UIColor whiteColor];
     lblValue.font = [UIFont boldSystemFontOfSize:valueSize];
     lblValue.textAlignment = NSTextAlignmentCenter;
-    
     self.valueLabels[title] = lblValue;
-    
     UIStackView *cellStack = [[UIStackView alloc] initWithArrangedSubviews:@[lblTitle, lblValue]];
     cellStack.axis = UILayoutConstraintAxisVertical;
     cellStack.alignment = UIStackViewAlignmentFill;
     cellStack.distribution = UIStackViewDistributionFill;
     cellStack.spacing = 2;
     cellStack.translatesAutoresizingMaskIntoConstraints = NO;
-    
     [container addSubview:cellStack];
-    
     [NSLayoutConstraint activateConstraints:@[
         [cellStack.centerYAnchor constraintEqualToAnchor:container.centerYAnchor],
         [cellStack.leadingAnchor constraintEqualToAnchor:container.leadingAnchor],
         [cellStack.trailingAnchor constraintEqualToAnchor:container.trailingAnchor]
     ]];
-    
     return container;
 }
-
-// --- DATA LOGIC ---
 
 - (void)setupObservers {
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleNewBallData:) name:ScreenDataProcessorNewBallDataNotification object:nil];
@@ -277,15 +214,29 @@ NSString *formattedStringFromInteger(NSInteger value) {
 - (NSMutableAttributedString *)attributedStringWithValue:(NSString *)value unit:(NSString *)unit {
     NSString *full = [NSString stringWithFormat:@"%@%@", value, unit];
     NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:full];
-    
     UIFont *baseFont = self.valueLabels[@"Launch Angle (VLA)"].font;
     if (!baseFont) baseFont = [UIFont boldSystemFontOfSize:32];
     UIFont *unitFont = [baseFont fontWithSize:baseFont.pointSize * 0.5];
-    
     NSRange unitRange = NSMakeRange(value.length, unit.length);
     [attr addAttribute:NSFontAttributeName value:unitFont range:unitRange];
-    
     return attr;
+}
+
+// --- NEW HELPER: Local Calculation Logic ---
+- (NSNumber *)calculateOfflineLocally:(NSDictionary *)data {
+    double distance = [data[@"CarryDistance"] doubleValue];
+    if (distance < 0.1) return nil;
+
+    double hla = [data[@"HLA"] doubleValue];
+    double spinAxis = [data[@"SpinAxis"] doubleValue];
+
+    double hlaRad = hla * (M_PI / 180.0);
+    double launchOffline = distance * sin(hlaRad);
+
+    double curveFactor = 0.006;
+    double curveOffline = distance * spinAxis * curveFactor;
+
+    return @(launchOffline + curveOffline);
 }
 
 - (void)setBallData:(NSDictionary *)data {
@@ -300,12 +251,22 @@ NSString *formattedStringFromInteger(NSInteger value) {
     NSString *hlaArrow = hla < 0 ? @"←" : (hla > 0 ? @"→" : @"");
     self.valueLabels[@"Offline (HLA)"].attributedText = [self attributedStringWithValue:[NSString stringWithFormat:@"%@%.1f", hlaArrow, fabs(hla)] unit:@"°"];
     
-    if (data[@"CalcOffline"]) {
-        float offYds = [data[@"CalcOffline"] floatValue];
+    // --- DISPLAY LOGIC ---
+    NSNumber *offlineVal = data[@"CalcOffline"];
+    
+    // If DataModel hasn't calculated it yet (likely), calculate it here!
+    if (!offlineVal) {
+        offlineVal = [self calculateOfflineLocally:data];
+    }
+    
+    if (offlineVal) {
+        float offYds = [offlineVal floatValue];
         NSString *offArrow = offYds < 0 ? @"←" : (offYds > 0 ? @"→" : @"");
         self.valueLabels[@"Offline (Total)"].attributedText = [self attributedStringWithValue:[NSString stringWithFormat:@"%@%.1f", offArrow, fabs(offYds)] unit:@" yds"];
+        self.titleLabels[@"Offline (Total)"].text = @"Offline (Carry)";
     } else {
         self.valueLabels[@"Offline (Total)"].text = @"--";
+        self.titleLabels[@"Offline (Total)"].text = @"Offline (Carry)";
     }
     
     self.valueLabels[@"Spin"].attributedText = [self attributedStringWithValue:[NSString stringWithFormat:@"%@", data[@"TotalSpin"]] unit:@" rpm"];
@@ -320,7 +281,11 @@ NSString *formattedStringFromInteger(NSInteger value) {
     
     self.valueLabels[@"Carry"].attributedText = [self attributedStringWithValue:[NSString stringWithFormat:@"%.0f", [data[@"CarryDistance"] floatValue]] unit:[NSString stringWithFormat:@" %@", distUnit]];
     
-    self.valueLabels[@"Total"].attributedText = [self attributedStringWithValue:[NSString stringWithFormat:@"%.0f", [data[@"TotalDistance"] floatValue]] unit:[NSString stringWithFormat:@" %@", distUnit]];
+    if (data[@"TotalDistance"] && [data[@"TotalDistance"] floatValue] > 0) {
+        self.valueLabels[@"Total"].attributedText = [self attributedStringWithValue:[NSString stringWithFormat:@"%.0f", [data[@"TotalDistance"] floatValue]] unit:[NSString stringWithFormat:@" %@", distUnit]];
+    } else {
+         self.valueLabels[@"Total"].text = @"--";
+    }
     
     if (isPutt) {
         self.valueLabels[@"Carry"].text = @"--";
@@ -328,11 +293,8 @@ NSString *formattedStringFromInteger(NSInteger value) {
         self.valueLabels[@"Spin"].text = @"--";
         self.valueLabels[@"Spin Axis"].text = @"--";
         self.valueLabels[@"Offline (Total)"].text = @"--";
+        self.titleLabels[@"Offline (Total)"].text = @"Offline (Carry)";
     }
-    
-    self.valueLabels[@"Club Speed"].text = @"--";
-    self.valueLabels[@"Path"].text = @"--";
-    self.valueLabels[@"AOA"].text = @"--";
 }
 
 - (void)setClubData:(NSDictionary *)data {
@@ -387,7 +349,6 @@ NSString *formattedStringFromInteger(NSInteger value) {
         if (running) {
             NSString* distUnit = [mgr.gameType isEqualToString:@"Putting"] ? @"ft" : @"yd";
             
-            // Use attributedStringWithValue to match styles, but keep size manageable via createMiniGameCell
             self.valueLabels[@"Target"].text = [NSString stringWithFormat:@"%ld%@", (long)[mgr getTargetDistanceForCurrentShot], distUnit];
             
             NSString *par = formattedStringFromInteger([mgr getMostRecentShotToPar]);
